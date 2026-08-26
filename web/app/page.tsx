@@ -7,6 +7,7 @@ import { StatusPanel } from "./components/StatusPanel";
 import { PublishPanel } from "./components/PublishPanel";
 import { TopicList } from "./components/TopicList";
 import { SettingsModal } from "./components/SettingsModal";
+import { HotTopicsExplore } from "./components/HotTopicsExplore";
 import { theme } from "./theme";
 import { API_BASE } from "./lib/constants";
 
@@ -36,11 +37,14 @@ export interface AgentEvent {
 
 type LeftPanel = "topics" | "input";
 type RightPanel = "status" | "publish";
+type CenterPanel = "article" | "hot-topics";
 
 export default function Home() {
   // UI 状态
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("topics");
   const [rightPanel, setRightPanel] = useState<RightPanel>("status");
+  const [centerPanel, setCenterPanel] = useState<CenterPanel>("article");
+  const [draftTopic, setDraftTopic] = useState("");
 
   // 生成状态
   const [isRunning, setIsRunning] = useState(false);
@@ -80,6 +84,7 @@ export default function Home() {
   const handleGenerate = useCallback(
     async (topic: string, platform: Platform, direction: string, topicId?: number, style?: string) => {
       viewingHistoryRef.current = false;
+      setCenterPanel("article");
       setViewingHistory(false);
       genStateRef.current = { article: "", score: 0, logs: [], keywords: [], currentNode: "planner", topicId: topicId ?? null, articleId: null, platform };
       setIsRunning(true);
@@ -220,6 +225,7 @@ export default function Home() {
 
   // 从历史列表选择已有文章
   const handleSelectArticle = useCallback((topicId: number, articleItem: { id: number; content_md: string; score: number; platform: string }) => {
+    setCenterPanel("article");
     viewingHistoryRef.current = true;
     setViewingHistory(true);
     setCurrentTopicId(topicId);
@@ -234,6 +240,7 @@ export default function Home() {
 
   // 切回正在生成的主题：从 ref 恢复显示状态
   const handleViewRunning = useCallback(() => {
+    setCenterPanel("article");
     viewingHistoryRef.current = false;
     setViewingHistory(false);
     const gs = genStateRef.current;
@@ -282,6 +289,7 @@ export default function Home() {
 
   // 点新建
   const handleNewTopic = useCallback(() => {
+    setCenterPanel("article");
     setLeftPanel("input");
     setArticle("");
     setScore(0);
@@ -331,8 +339,11 @@ export default function Home() {
           />
         ) : (
           <InputPanel
+            topic={draftTopic}
+            onTopicChange={setDraftTopic}
             onGenerate={(topic, platform, direction, style) => handleGenerate(topic, platform, direction, undefined, style)}
             onStop={handleStop}
+            onExploreTopics={() => setCenterPanel("hot-topics")}
             onBack={hasTopics ? () => setLeftPanel("topics") : undefined}
             isRunning={isRunning}
           />
@@ -341,14 +352,25 @@ export default function Home() {
 
       {/* Center */}
       <main style={{ flex: 1, overflow: "auto", background: theme.cream }}>
-        <ArticlePanel
-          article={article}
-          isRunning={effectiveRunning}
-          currentNode={currentNode}
-          platform={currentPlatform}
-          onPublish={article && !effectiveRunning ? () => setRightPanel("publish") : undefined}
-          onArticleUpdate={handleArticleUpdate}
-        />
+        {centerPanel === "hot-topics" && !effectiveRunning ? (
+          <HotTopicsExplore
+            onBack={() => setCenterPanel("article")}
+            onCreate={(title) => {
+              setDraftTopic(title);
+              setCenterPanel("article");
+            }}
+            disabled={isRunning}
+          />
+        ) : (
+          <ArticlePanel
+            article={article}
+            isRunning={effectiveRunning}
+            currentNode={currentNode}
+            platform={currentPlatform}
+            onPublish={article && !effectiveRunning ? () => setRightPanel("publish") : undefined}
+            onArticleUpdate={handleArticleUpdate}
+          />
+        )}
       </main>
 
       {/* Right — 只在生成中（非查看历史）/有日志/发布面板时显示 */}
