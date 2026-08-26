@@ -5,31 +5,18 @@ import { Button, Spin } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { API_BASE } from "../lib/constants";
 import { theme } from "../theme";
-
-interface HotTopic {
-  id: string;
-  rank: number;
-  title: string;
-  source: string;
-  original_url: string;
-  aihot_url: string;
-  source_count: number;
-  latest_at: string | null;
-}
-
-interface HotTopicsResponse {
-  items: HotTopic[];
-  canonical: string;
-}
+import type { HotTopic, HotTopicsResponse } from "../types/hotTopics";
 
 interface Props {
   onUseTitle: (title: string) => void;
+  onExplore: () => void;
   disabled?: boolean;
 }
 
-export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
+export function HotTopicsPanel({ onUseTitle, onExplore, disabled = false }: Props) {
   const [topics, setTopics] = useState<HotTopic[]>([]);
   const [canonical, setCanonical] = useState("https://aihot.virxact.com/hot");
+  const [provider, setProvider] = useState<"aihot" | "hot-radar">("aihot");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -46,7 +33,8 @@ export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
         throw new Error("热点榜返回数据异常");
       }
       setTopics(data.items);
-      if (data.canonical) setCanonical(data.canonical);
+      setCanonical(data.canonical || "");
+      if (data.provider) setProvider(data.provider);
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         setError((err as Error).message || "热点榜加载失败");
@@ -67,7 +55,7 @@ export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
 
   return (
     <section
-      aria-label="AIHot 热点榜"
+      aria-label={`${provider === "aihot" ? "AIHot" : "Hot Radar"} 热点榜`}
       style={{
         marginBottom: 24,
         border: `1px solid ${theme.sand}`,
@@ -86,15 +74,16 @@ export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
         }}
       >
         <div>
-          <div style={{ fontSize: 13, fontWeight: 650, color: theme.ink }}>AIHot 热点榜</div>
-          <a
-            href={canonical}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 11, color: theme.bark }}
-          >
-            数据来源 AIHot · 查看完整榜单 ↗
-          </a>
+          <div style={{ fontSize: 13, fontWeight: 650, color: theme.ink }}>
+            {provider === "aihot" ? "AIHot" : "Hot Radar"} 热点榜
+          </div>
+          {canonical ? (
+            <a href={canonical} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: theme.bark }}>
+              数据来源 {provider === "aihot" ? "AIHot" : "Hot Radar"} · 查看完整榜单 ↗
+            </a>
+          ) : (
+            <div style={{ fontSize: 11, color: theme.bark }}>数据来源 Hot Radar · 多源聚合</div>
+          )}
         </div>
         <Button
           type="text"
@@ -123,8 +112,9 @@ export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
           </button>
         </div>
       ) : (
-        <ol style={{ listStyle: "none", margin: 0, padding: "2px 12px 8px" }}>
-          {topics.map((topic) => (
+        <>
+          <ol style={{ listStyle: "none", margin: 0, padding: "2px 12px 8px" }}>
+            {topics.map((topic) => (
             <li
               key={topic.id}
               style={{ padding: "10px 0", borderBottom: `1px solid ${theme.sand}` }}
@@ -171,8 +161,17 @@ export function HotTopicsPanel({ onUseTitle, disabled = false }: Props) {
                 </div>
               </div>
             </li>
-          ))}
-        </ol>
+            ))}
+          </ol>
+          <button
+            type="button"
+            onClick={onExplore}
+            disabled={disabled}
+            style={{ width: "100%", border: 0, borderTop: `1px solid ${theme.sand}`, padding: "11px 12px", background: theme.amberSoft, color: disabled ? theme.stone : theme.amber, cursor: disabled ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 650 }}
+          >
+            查看更多热点 →
+          </button>
+        </>
       )}
     </section>
   );
