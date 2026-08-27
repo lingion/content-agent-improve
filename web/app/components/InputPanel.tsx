@@ -67,14 +67,16 @@ const PLATFORMS: { value: Platform; label: string; desc: string; icon: React.Rea
 ];
 
 interface Props {
+  topic: string;
+  onTopicChange: (topic: string) => void;
   onGenerate: (topic: string, platform: Platform, direction: string, style?: string) => void;
   onStop: () => void;
+  onExploreTopics: () => void;
   onBack?: () => void;
   isRunning: boolean;
 }
 
-export function InputPanel({ onGenerate, onStop, onBack, isRunning }: Props) {
-  const [topic, setTopic] = useState("");
+export function InputPanel({ topic, onTopicChange, onGenerate, onStop, onExploreTopics, onBack, isRunning }: Props) {
   const [platform, setPlatform] = useState<Platform>("wechat");
   const [imageStyle, setImageStyle] = useState<string>("");
   const [directionKey, setDirectionKey] = useState("tech");
@@ -141,7 +143,7 @@ export function InputPanel({ onGenerate, onStop, onBack, isRunning }: Props) {
           {sectionLabel("文章主题")}
           <TextArea
             value={topic}
-            onChange={(e) => setTopic(e.target.value)}
+            onChange={(e) => onTopicChange(e.target.value)}
             placeholder="例如：2026 年 AI Agent 发展趋势"
             rows={3}
             disabled={isRunning}
@@ -162,7 +164,7 @@ export function InputPanel({ onGenerate, onStop, onBack, isRunning }: Props) {
           />
         </div>
 
-        <HotTopicsPanel onUseTitle={setTopic} disabled={isRunning} />
+        <HotTopicsPanel onUseTitle={onTopicChange} onExplore={onExploreTopics} disabled={isRunning} />
 
         {/* Direction */}
         <div style={{ marginBottom: 24 }}>
