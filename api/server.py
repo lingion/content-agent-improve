@@ -24,7 +24,8 @@ from agent.publish.wechat_html import md_to_wechat_html, AVAILABLE_THEMES, AVAIL
 from agent.publish.cover_prompt import generate_cover_prompt
 from agent import db, memory
 from agent.tools.image_gen import STYLE_PRESETS, PLATFORM_STYLES
-from api.aihot import AIHotError, fetch_hot_topics
+from api.hot_topics import HotTopicsError, fetch_hot_topics
+from api.hot_radar import HotRadarError, fetch_hot_radar
 from agent.nodes.paraphraser import PARAPHRASE_ENGINE_VERSION
 from agent.tools.screenshot import SCREENSHOT_ENGINE_VERSION
 
@@ -149,12 +150,25 @@ async def generate(req: GenerateRequest):
 
 @app.get("/api/hot-topics")
 async def hot_topics():
-    """通过后端代理获取 AIHot 匿名热点榜，不向前端暴露第三方调用细节。"""
+    """获取统一热点榜，AIHot 不可用或过期时由 Hot Radar 兜底。"""
     from starlette.concurrency import run_in_threadpool
 
     try:
         return await run_in_threadpool(fetch_hot_topics)
-    except AIHotError as exc:
+    except HotTopicsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/hot-topics/explore")
+async def explore_hot_topics(limit: int = 20):
+    """主动使用 Hot Radar 获取更多选题，与 AIHot 自动 fallback 互不影响。"""
+    from functools import partial
+    from starlette.concurrency import run_in_threadpool
+
+    safe_limit = min(max(limit, 1), 50)
+    try:
+        return await run_in_threadpool(partial(fetch_hot_radar, max_items=safe_limit))
+    except HotRadarError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
