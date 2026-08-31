@@ -1,4 +1,4 @@
-"""AIHot 优先、Hot Radar 兜底的统一热点服务。"""
+"""AIHot 优先、Hot Radar 与 Nano Researcher 依次兜底的统一热点服务。"""
 
 from __future__ import annotations
 from collections.abc import Callable
@@ -8,6 +8,7 @@ import os
 from typing import Any
 from api.aihot import AIHotError, fetch_hot_topics as fetch_aihot
 from api.hot_radar import fetch_hot_radar
+from api.nano_hot import fetch_nano_hot_topics
 
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_AGE_HOURS = 36.0
@@ -40,8 +41,8 @@ def _validate_aihot_freshness(payload: dict[str, Any], now: datetime, max_age_ho
         raise AIHotError(f"AIHot 热点数据已超过 {max_age_hours:g} 小时未更新")
 
 
-def fetch_hot_topics(aihot_fetcher: Callable[[], dict[str, Any]] = fetch_aihot, hot_radar_fetcher: Callable[[], dict[str, Any]] = fetch_hot_radar, *, now: datetime | None = None, max_age_hours: float | None = None) -> dict[str, Any]:
-    """优先返回 AIHot；失败、空数据或过期时自动使用 Hot Radar。"""
+def fetch_hot_topics(aihot_fetcher: Callable[[], dict[str, Any]] = fetch_aihot, hot_radar_fetcher: Callable[[], dict[str, Any]] = fetch_hot_radar, nano_fetcher: Callable[[], dict[str, Any]] | None = None, *, now: datetime | None = None, max_age_hours: float | None = None) -> dict[str, Any]:
+    """优先返回 AIHot；失败、空数据或过期时依次使用 Hot Radar、Nano Researcher。"""
     current_time = now or datetime.now(timezone.utc)
     if max_age_hours is None:
         try:
@@ -64,5 +65,15 @@ def fetch_hot_topics(aihot_fetcher: Callable[[], dict[str, Any]] = fetch_aihot, 
         logger.info("Hot topics provider selected: hot-radar; count=%d", len(result.get("items", [])))
         return result
     except Exception as exc:
-        logger.error("Both hot topic providers failed: %s", exc)
-        raise HotTopicsError("AIHot 与 Hot Radar 热点服务均暂时不可用") from exc
+        logger.warning("Hot Radar unavailable, falling back to Nano Researcher: %s", exc)
+    if nano_fetcher is None:
+        nano_fetcher = fetch_nano_hot_topics
+    try:
+        result = nano_fetcher()
+        result["provider"] = "nano-researcher"
+        result.setdefault("failed_sources", [])
+        logger.info("Hot topics provider selected: nano-researcher; count=%d", len(result.get("items", [])))
+        return result
+    except Exception as exc:
+        logger.error("All hot topic providers failed: %s", exc)
+        raise HotTopicsError("AIHot、Hot Radar 与 Nano Researcher 热点服务均暂时不可用") from exc
