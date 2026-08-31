@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from api.aihot import AIHotError
 from api.hot_radar import HotRadarError
+from api.nano_hot import NanoHotError
 from api.hot_topics import HotTopicsError, fetch_hot_topics
 
 NOW = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
@@ -44,6 +45,53 @@ class HotTopicsFallbackTests(unittest.TestCase):
             raise HotRadarError("offline")
         with self.assertRaises(HotTopicsError):
             fetch_hot_topics(failed_aihot, failed_radar, now=NOW)
+
+    def test_nano_called_only_when_aihot_and_radar_fail(self):
+        calls = []
+
+        def failed_aihot():
+            calls.append("aihot")
+            raise AIHotError("offline")
+        def failed_radar():
+            calls.append("radar")
+            raise HotRadarError("offline")
+        def nano():
+            calls.append("nano")
+            return payload(NOW.isoformat())
+        result = fetch_hot_topics(failed_aihot, failed_radar, nano_fetcher=nano, now=NOW)
+        self.assertEqual(result["provider"], "nano-researcher")
+        self.assertEqual(calls, ["aihot", "radar", "nano"])
+
+    def test_nano_not_called_when_radar_succeeds(self):
+        def failed_aihot():
+            raise AIHotError("offline")
+        called = False
+        def nano():
+            nonlocal called
+            called = True
+            return payload(NOW.isoformat())
+        result = fetch_hot_topics(failed_aihot, lambda: payload(NOW.isoformat()), nano_fetcher=nano, now=NOW)
+        self.assertEqual(result["provider"], "hot-radar")
+        self.assertFalse(called)
+
+    def test_raises_when_all_three_fail(self):
+        def failed_aihot():
+            raise AIHotError("offline")
+        def failed_radar():
+            raise HotRadarError("offline")
+        def failed_nano():
+            raise NanoHotError("offline")
+        with self.assertRaises(HotTopicsError):
+            fetch_hot_topics(failed_aihot, failed_radar, nano_fetcher=failed_nano, now=NOW)
+
+    def test_nano_result_marked_with_provider(self):
+        def failed():
+            raise AIHotError("offline")
+        def failed_radar():
+            raise HotRadarError("offline")
+        result = fetch_hot_topics(failed, failed_radar, nano_fetcher=lambda: payload(NOW.isoformat()), now=NOW)
+        self.assertEqual(result["provider"], "nano-researcher")
+        self.assertEqual(result["failed_sources"], [])
 
 
 if __name__ == "__main__":
