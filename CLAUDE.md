@@ -68,3 +68,6 @@ Writer 在初稿中插入占位符，ImageFetcher 节点替换为真实图片。
 - SSE 流式事件格式：`{node, data, active}`，`active` 字段标记当前执行节点
 - 中文正文，英文专有名词保留原文
 - 修改代码时，要考虑是否需要同步全局注释/文档
+
+## 验证纪律
+- 🚫不许启动 dev server / 做运行时验证:uvicorn / bun dev / next dev / curl 探活一律禁跑;静态手段即可(`bun run build` / `.venv/bin/python -m unittest` / 类型检查 / 代码审读)。机器 64G 内存曾被 Turbopack 冷编译炸到重启。
