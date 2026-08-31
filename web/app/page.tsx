@@ -8,6 +8,7 @@ import { PublishPanel } from "./components/PublishPanel";
 import { TopicList } from "./components/TopicList";
 import { SettingsModal } from "./components/SettingsModal";
 import { HotTopicsExplore } from "./components/HotTopicsExplore";
+import LibraryPanel from "./components/LibraryPanel";
 import { theme } from "./theme";
 import { API_BASE } from "./lib/constants";
 
@@ -37,7 +38,7 @@ export interface AgentEvent {
 
 type LeftPanel = "topics" | "input";
 type RightPanel = "status" | "publish";
-type CenterPanel = "article" | "hot-topics";
+type CenterPanel = "article" | "hot-topics" | "library";
 
 export default function Home() {
   // UI 状态
@@ -327,6 +328,7 @@ export default function Home() {
             runningTopicId={runningTopicId}
             runningPlatform={runningPlatform}
             onSettings={() => setSettingsOpen(true)}
+            onOpenLibrary={() => setCenterPanel("library")}
             onDeleteArticle={(articleId) => {
               if (currentArticleId === articleId) {
                 setArticle("");
@@ -352,7 +354,9 @@ export default function Home() {
 
       {/* Center */}
       <main style={{ flex: 1, overflow: "auto", background: theme.cream }}>
-        {centerPanel === "hot-topics" && !effectiveRunning ? (
+        {centerPanel === "library" && !effectiveRunning ? (
+          <LibraryPanel />
+        ) : centerPanel === "hot-topics" && !effectiveRunning ? (
           <HotTopicsExplore
             onBack={() => setCenterPanel("article")}
             onCreate={(title) => {

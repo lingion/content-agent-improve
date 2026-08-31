@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button, Popconfirm } from "antd";
-import { PlusOutlined, DeleteOutlined, LoadingOutlined, SettingOutlined } from "@ant-design/icons";
+import { PlusOutlined, DeleteOutlined, LoadingOutlined, SettingOutlined, BookOutlined } from "@ant-design/icons";
 import { theme } from "../theme";
 import { API_BASE } from "../lib/constants";
 import type { Platform } from "../page";
@@ -58,11 +58,12 @@ interface Props {
   runningPlatform?: string; // 正在生成的平台
   onSettings?: () => void;
   onDeleteArticle?: (articleId: number) => void;
+  onOpenLibrary?: () => void;
 }
 
 export function TopicList({
   onNewTopic, onSelectArticle, onGenerateForPlatform, onViewRunning, refreshKey,
-  activeTopicId, activeArticleId, isRunning, runningTopicId, runningPlatform, onSettings, onDeleteArticle,
+  activeTopicId, activeArticleId, isRunning, runningTopicId, runningPlatform, onSettings, onDeleteArticle, onOpenLibrary,
 }: Props) {
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -145,6 +146,15 @@ export function TopicList({
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
+          {onOpenLibrary && (
+            <Button
+              icon={<BookOutlined />}
+              onClick={onOpenLibrary}
+              size="small"
+              title="团队文章库"
+              style={{ borderRadius: 8, color: theme.bark, borderColor: theme.sand }}
+            />
+          )}
           {onSettings && (
             <Button
               icon={<SettingOutlined />}
