@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 FRONTMATTER_FIELDS = [
@@ -11,6 +14,8 @@ FRONTMATTER_FIELDS = [
 ]
 
 ARTICLES_DIR = Path("articles")
+IMAGE_REF_PATTERN = re.compile(r"/api/images/([\w.\-]+)")
+CST = timezone(timedelta(hours=8))
 
 
 def slugify(text: str, max_len: int = 60) -> str:
@@ -40,3 +45,60 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
             key, _, value = line.partition(":")
             meta[key.strip()] = value.strip()
     return meta, text[end + 4:].lstrip("\n")
+
+
+def rewrite_image_paths(content_md: str) -> str:
+    return IMAGE_REF_PATTERN.sub(r"images/\1", content_md)
+
+
+def build_article_dir(
+    title: str,
+    platform: str,
+    direction: str,
+    author: str,
+    score: int,
+    content_md: str,
+    created_at: str,
+    topic_id: int = 0,
+    source_images_dir: Path | None = None,
+) -> Path:
+    """构建完整可发布包目录：article.md + images/ + meta.json。"""
+    day = created_at[:10] if len(created_at) >= 10 else datetime.now(CST).strftime("%Y-%m-%d")
+    base = f"{day}-{slugify(title)}-{platform}"
+    target = ARTICLES_DIR / base
+    if target.exists():
+        index = 2
+        while (ARTICLES_DIR / f"{base}-{index}").exists():
+            index += 1
+        target = ARTICLES_DIR / f"{base}-{index}"
+
+    images_out = target / "images"
+    images_out.mkdir(parents=True, exist_ok=True)
+
+    rewritten = rewrite_image_paths(content_md)
+    meta = {
+        "title": title,
+        "topic_id": topic_id,
+        "platform": platform,
+        "direction": direction,
+        "author": author,
+        "score": score,
+        "status": "draft",
+        "wechat_media_id": "",
+        "created_at": created_at,
+        "published_at": "",
+    }
+    (target / "article.md").write_text(dump_frontmatter(meta) + "\n" + rewritten, encoding="utf-8")
+
+    src_dir = Path(source_images_dir) if source_images_dir else Path("data/images")
+    for match in IMAGE_REF_PATTERN.finditer(content_md):
+        src = src_dir / match.group(1)
+        if src.exists():
+            shutil.copy2(src, images_out / match.group(1))
+
+    record = dict(meta)
+    record["slug_dir"] = target.name
+    (target / "meta.json").write_text(
+        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return target
