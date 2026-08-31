@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -102,3 +103,64 @@ def build_article_dir(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return target
+
+
+def _git_pull() -> bool:
+    """静默 pull，失败（无网络/无仓库）不影响本地浏览。"""
+    try:
+        subprocess.run(
+            ["git", "pull", "--rebase", "origin", "main"],
+            capture_output=True, timeout=60, check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def list_articles(refresh: bool = False) -> list[dict]:
+    if refresh:
+        _git_pull()
+    rows = []
+    if not ARTICLES_DIR.exists():
+        return rows
+    for meta_file in sorted(ARTICLES_DIR.glob("*/meta.json")):
+        try:
+            record = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        rows.append(record)
+    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    return rows
+
+
+def read_article(slug_dir: str) -> dict | None:
+    target = ARTICLES_DIR / slug_dir
+    article = target / "article.md"
+    if not article.exists():
+        return None
+    meta, body = parse_frontmatter(article.read_text(encoding="utf-8"))
+    images_dir = target / "images"
+    images = sorted(p.name for p in images_dir.glob("*") if p.is_file()) if images_dir.exists() else []
+    return {"meta": meta, "content_md": body, "images": images}
+
+
+def mark_published(slug_dir: str, media_id: str = "") -> bool:
+    target = ARTICLES_DIR / slug_dir
+    article = target / "article.md"
+    meta_file = target / "meta.json"
+    if not article.exists() or not meta_file.exists():
+        return False
+    meta, body = parse_frontmatter(article.read_text(encoding="utf-8"))
+    meta.update({
+        "status": "published",
+        "published_at": datetime.now(CST).isoformat(),
+        "wechat_media_id": media_id,
+    })
+    article.write_text(dump_frontmatter(meta) + "\n" + body, encoding="utf-8")
+    try:
+        record = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        record = {}
+    record.update({k: meta[k] for k in ("status", "published_at", "wechat_media_id")})
+    meta_file.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True

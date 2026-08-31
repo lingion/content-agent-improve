@@ -100,3 +100,52 @@ class BuildArticleDirTests(unittest.TestCase):
         content = "![缺失](/api/images/nope.png)"
         d = build_article_dir("t", "zhihu", "tech", "a", 7, content, "2026-08-30T00:00:00+08:00")
         self.assertTrue((d / "article.md").exists())
+
+
+from agent.publish.article_store import list_articles, read_article, mark_published
+
+
+class ReadLayerTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        import os
+        self._cwd = os.getcwd()
+        os.chdir(self._tmp.name)
+        self.addCleanup(os.chdir, self._cwd)
+
+    def _build_two(self):
+        build_article_dir("文章A", "wechat", "tech", "a", 8, "内容A", "2026-08-30T09:00:00+08:00")
+        build_article_dir("文章B", "zhihu", "tech", "b", 7, "内容B", "2026-08-29T09:00:00+08:00")
+
+    def test_list_sorted_desc_and_shape(self):
+        self._build_two()
+        rows = list_articles()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["title"], "文章A")
+        self.assertIn("slug_dir", rows[0])
+        self.assertIn("status", rows[0])
+
+    def test_read_article_roundtrip(self):
+        self._build_two()
+        rows = list_articles()
+        detail = read_article(rows[0]["slug_dir"])
+        self.assertIn("内容A", detail["content_md"])
+        self.assertEqual(detail["meta"]["platform"], "wechat")
+
+    def test_read_missing_returns_none(self):
+        self.assertIsNone(read_article("no-such-dir"))
+
+    def test_mark_published_updates_both_files(self):
+        self._build_two()
+        rows = list_articles()
+        slug = rows[0]["slug_dir"]
+        self.assertTrue(mark_published(slug, media_id="media_123"))
+        record = json.loads((ARTICLES_DIR / slug / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["status"], "published")
+        self.assertEqual(record["wechat_media_id"], "media_123")
+        meta, _ = parse_frontmatter((ARTICLES_DIR / slug / "article.md").read_text(encoding="utf-8"))
+        self.assertEqual(meta["status"], "published")
+
+    def test_mark_published_missing_returns_false(self):
+        self.assertFalse(mark_published("nope"))
