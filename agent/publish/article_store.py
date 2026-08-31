@@ -164,3 +164,85 @@ def mark_published(slug_dir: str, media_id: str = "") -> bool:
     record.update({k: meta[k] for k in ("status", "published_at", "wechat_media_id")})
     meta_file.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
+
+
+PUSH_QUEUE_PATH = Path("data/push_queue.json")
+
+
+def get_push_token() -> str | None:
+    import os as _os
+    token = _os.getenv("ARTICLE_REPO_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        out = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10)
+        token = out.stdout.strip()
+        return token or None
+    except Exception:
+        return None
+
+
+def _enqueue(message: str) -> None:
+    PUSH_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        queue = json.loads(PUSH_QUEUE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        queue = []
+    if message not in queue:
+        queue.append(message)
+    PUSH_QUEUE_PATH.write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
+
+
+def _run_git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], capture_output=True, text=True, timeout=120)
+
+
+def push_to_articles(commit_message: str | None = None) -> dict:
+    """提交并推送 articles/ 变更。无变更直接成功。失败入队待重试。"""
+    if not ARTICLES_DIR.exists():
+        return {"ok": True, "error": ""}
+    status = _run_git("status", "--porcelain", "--", str(ARTICLES_DIR))
+    if status.returncode != 0:
+        _enqueue(commit_message or "feat: article library sync")
+        return {"ok": False, "error": f"git status failed: {status.stderr.strip()}"}
+    if not status.stdout.strip():
+        return {"ok": True, "error": ""}
+
+    message = commit_message or f"feat: article library sync ({datetime.now(CST).strftime('%Y-%m-%d %H:%M')})"
+    add = _run_git("add", str(ARTICLES_DIR))
+    commit = _run_git("commit", "-m", message)
+    if commit.returncode != 0:
+        _enqueue(message)
+        return {"ok": False, "error": f"git commit failed: {commit.stderr.strip()}"}
+
+    if get_push_token() is None:
+        _enqueue(message)
+        return {"ok": False, "error": "未配置推送凭证（ARTICLE_REPO_TOKEN 或 gh auth token）"}
+
+    pull = _run_git("pull", "--rebase", "origin", "main")
+    if pull.returncode != 0:
+        _run_git("rebase", "--abort")
+        _enqueue(message)
+        return {"ok": False, "error": f"git pull --rebase failed: {pull.stderr.strip()}"}
+
+    push = _run_git("push", "origin", "main")
+    if push.returncode != 0:
+        _enqueue(message)
+        return {"ok": False, "error": f"git push failed: {push.stderr.strip()}"}
+    return {"ok": True, "error": ""}
+
+
+def retry_push_queue() -> dict:
+    try:
+        queue = json.loads(PUSH_QUEUE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        queue = []
+    if not queue:
+        return {"ok": True, "error": "", "retried": 0}
+    for message in list(queue):
+        result = push_to_articles(message)
+        if not result["ok"]:
+            return {"ok": False, "error": result["error"], "retried": queue.index(message)}
+        queue.remove(message)
+    PUSH_QUEUE_PATH.write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "error": "", "retried": len(queue)}
