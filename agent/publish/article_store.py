@@ -246,3 +246,33 @@ def retry_push_queue() -> dict:
         queue.remove(message)
     PUSH_QUEUE_PATH.write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
     return {"ok": True, "error": "", "retried": len(queue)}
+
+
+def find_slug_by_article(topic_title: str, platform: str, created_at_prefix: str) -> str | None:
+    """按 title+platform+日期前缀在 articles 索引中找 slug_dir。"""
+    for row in list_articles():
+        if row.get("title") == topic_title and row.get("platform") == platform \
+                and str(row.get("created_at", "")).startswith(created_at_prefix):
+            return row.get("slug_dir")
+    return None
+
+
+def submit_article_to_library(
+    title: str, platform: str, direction: str, author: str,
+    score: int, content_md: str, created_at: str, topic_id: int = 0,
+    push: bool = True,
+) -> dict:
+    """入库 + 尽力推送。任何失败都不抛异常，返回执行报告。"""
+    report = {"built": False, "slug_dir": "", "pushed": False, "error": ""}
+    try:
+        target = build_article_dir(title, platform, direction, author, score, content_md, created_at, topic_id)
+        report["built"] = True
+        report["slug_dir"] = target.name
+        if push:
+            result = push_to_articles(f"feat: article {target.name} by {author}")
+            report["pushed"] = result["ok"]
+            if not result["ok"]:
+                report["error"] = result["error"]
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"
+    return report
