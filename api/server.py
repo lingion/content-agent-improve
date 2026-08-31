@@ -25,6 +25,7 @@ from agent.publish.cover_prompt import generate_cover_prompt
 from agent import db, memory
 from agent.tools.image_gen import STYLE_PRESETS, PLATFORM_STYLES
 from api.hot_topics import HotTopicsError, fetch_hot_topics
+from api.article_library import router as article_library_router
 from api.hot_radar import HotRadarError, fetch_hot_radar
 from agent.nodes.paraphraser import PARAPHRASE_ENGINE_VERSION
 from agent.tools.screenshot import SCREENSHOT_ENGINE_VERSION
@@ -442,5 +443,8 @@ async def health():
 # ─── 静态文件（放在最后，避免拦截 API 路由）─────────────
 
 os.makedirs("data/images", exist_ok=True)
+os.makedirs("articles", exist_ok=True)
 from fastapi.staticfiles import StaticFiles  # noqa: E402
+app.include_router(article_library_router)
 app.mount("/api/images", StaticFiles(directory="data/images"), name="images")
+app.mount("/api/library-files", StaticFiles(directory="articles"), name="library-files")
