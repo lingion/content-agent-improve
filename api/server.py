@@ -128,6 +128,24 @@ async def generate(req: GenerateRequest):
                     topic_id, req.platform, article_md, score
                 )
 
+        # 团队文章库：后台线程入库+推送，不阻塞 SSE 结束
+        if article_record and article_md and os.getenv("ARTICLE_LIBRARY_ENABLED", "1") != "0":
+            import threading
+            from datetime import datetime, timezone, timedelta
+            from agent.publish.article_store import submit_article_to_library
+
+            def _push_library():
+                report = submit_article_to_library(
+                    title=req.topic[:120], platform=req.platform,
+                    direction=req.direction, author=os.getenv("ARTICLE_AUTHOR", ""),
+                    score=score, content_md=article_md,
+                    created_at=datetime.now(timezone(timedelta(hours=8))).isoformat(),
+                    topic_id=topic_id,
+                )
+                print(f"[Library] 推送结果：{report}")
+
+            threading.Thread(target=_push_library, daemon=True).start()
+
         done_payload = {
             "node": "__done__",
             "data": {
@@ -349,6 +367,24 @@ async def wechat_publish(
                 article_id, status="published",
                 wechat_media_id=result.get("media_id", ""),
             )
+            # 团队文章库状态回写
+            from datetime import datetime
+            from agent.publish.article_store import find_slug_by_article, mark_published, push_to_articles
+            try:
+                slug = None
+                if article_id:
+                    art = db.get_article(article_id)
+                    if art:
+                        topic_rec = db.get_topic(art["topic_id"])
+                        if topic_rec:
+                            slug = find_slug_by_article(
+                                topic_rec["title"][:120], "wechat",
+                                datetime.fromtimestamp(art["created_at"]).strftime("%Y-%m-%d"),
+                            )
+                if slug and mark_published(slug, media_id=result.get("media_id", "")):
+                    push_to_articles(f"feat: publish article {slug}")
+            except Exception as exc:
+                print(f"[Library] 发布状态回写失败（不影响发布）：{exc}")
         return {"success": True, **result}
     except Exception as e:
         return {"success": False, "error": str(e)}
