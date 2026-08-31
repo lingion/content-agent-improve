@@ -41,6 +41,16 @@
 **可观测**
 - 接入 LangSmith，每个节点的输入输出、耗时、Token 用量一目了然
 
+**团队文章库（多人共享）**
+- 公共 GitHub 仓库：每个用户在本机生成的文章自动按 `<YYYY-MM-DD>-<slug>-<platform>` 目录打包成完整可发布包（Markdown 正文 + 配图 + meta.json），推送到团队共享 GitHub 仓库
+- 离线容错：网络/认证失败时进入本地推送队列（`data/push_queue.json`），下次生成后自动重试
+- 跨人浏览：前端"团队文章库"标签列出仓库里所有人的草稿与已发布文章，可一键查看正文、配图、frontmatter；同一选题已有人做过时人工自查避免重复
+- 发布回写：微信发布成功后把 `wechat_media_id` 与发布时间回写到共享仓库的对应文章 frontmatter + meta.json
+
+**热榜多源 Fallback**
+- 三级链：AIHot（新鲜度校验）→ Hot Radar（21 源聚合）→ Nano Researcher（本地 HTTP 服务的 query 检索）
+- 任意一级失败自动降级到下一级；三层全挂时文章生成中止并明确报错
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -215,6 +225,18 @@ LLM_MODEL=claude-sonnet-4-6
 |---|---|
 | `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 微信公众号 API，发布到草稿箱 |
 | `LANGCHAIN_API_KEY` | LangSmith 调试追踪 |
+| `NANO_HOT_QUERY` | Nano Researcher 热点查询词，默认 `今日热点新闻 热搜榜` |
+| `NANO_SEARCH_URL` | Nano Researcher 原子搜索地址，默认 `http://127.0.0.1:8787/v1/search` |
+| `ARTICLE_REPO_TOKEN` | 团队文章仓库 GitHub 推送 token；未设置时回退到 `gh auth token` |
+| `ARTICLE_REPO_URL` | 团队文章仓库 Git remote 地址；默认使用当前项目的 `origin` |
+| `ARTICLE_LIBRARY_ENABLED` | 自动写入文章库开关，默认启用；设为 `0` 禁用 |
+| `ARTICLE_AUTHOR` | 当前用户写入文章包的作者名 |
+
+文章库目录默认是项目根目录下的 `articles/`，建议把它提交到独立的团队文章仓库，或直接让当前项目的 `origin` 指向该共享仓库。
+
+### Nano Researcher 服务
+
+Nano Researcher 作为最后一级热点 Fallback，由用户单独启动本地 HTTP 服务（默认 `127.0.0.1:8787`）。content-agent 只调用其 `POST /v1/search` 原子接口，不负责启动或管理 Nano 进程。
 
 ### 4. 启动
 
