@@ -65,6 +65,41 @@ class NanoHotClientTests(unittest.TestCase):
             del os.environ["NANO_HOT_QUERY"]
         self.assertEqual(seen["json"]["query"], "科技新闻")
 
+    def test_default_query_is_empty_full_board(self):
+        seen = {}
+
+        def post(url, **kw):
+            seen["json"] = kw.get("json")
+            return ok_response({"outcome": "success_with_content", "results": [
+                {"title": "t", "url": "https://example.com"},
+            ]})
+
+        import os
+        saved = os.environ.pop("NANO_HOT_QUERY", None)
+        try:
+            fetch_nano_hot_topics(http_post=post)
+        finally:
+            if saved is not None:
+                os.environ["NANO_HOT_QUERY"] = saved
+        self.assertEqual(seen["json"]["query"], "")
+
+    def test_board_source_from_metadata_becomes_topic_source(self):
+        payload = {
+            "outcome": "success_with_content",
+            "results": [
+                {"title": "AI芯片突破", "url": "https://example.com/a",
+                 "metadata": {"hotBoardSource": "百度热搜", "hot": "999"}},
+                {"title": "前端新框架", "url": "https://example.com/b",
+                 "metadata": {"hotBoardSource": "掘金热榜"}},
+                {"title": "无元数据条目", "url": "https://example.com/c"},
+                {"title": "坏元数据条目", "url": "https://example.com/d",
+                 "metadata": "not-a-dict"},
+            ],
+        }
+        result = fetch_nano_hot_topics(http_post=lambda url, **kw: ok_response(payload))
+        sources = [item["source"] for item in result["items"]]
+        self.assertEqual(sources, ["百度热搜", "掘金热榜", "Nano Researcher", "Nano Researcher"])
+
 
 if __name__ == "__main__":
     unittest.main()
