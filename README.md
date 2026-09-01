@@ -225,7 +225,7 @@ LLM_MODEL=claude-sonnet-4-6
 |---|---|
 | `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 微信公众号 API，发布到草稿箱 |
 | `LANGCHAIN_API_KEY` | LangSmith 调试追踪 |
-| `NANO_HOT_QUERY` | Nano Researcher 热点查询词，默认 `今日热点新闻 热搜榜` |
+| `NANO_HOT_QUERY` | Nano Researcher 热榜过滤词；默认空 = 返回按源轮询交织的全榜，设置后按 token 过滤标题 |
 | `NANO_SEARCH_URL` | Nano Researcher 原子搜索地址，默认 `http://127.0.0.1:8787/v1/search` |
 | `ARTICLE_REPO_TOKEN` | 团队文章仓库 GitHub 推送 token；未设置时回退到 `gh auth token` |
 | `ARTICLE_REPO_URL` | 团队文章仓库 Git remote 地址；默认使用当前项目的 `origin` |
