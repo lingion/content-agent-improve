@@ -20,3 +20,7 @@ output_*
 data/
 
 .next
+
+# Docker 部署的凭证挂载文件（从宿主机 ~/.git-credentials 复制）
+Docker-git-credentials
+Docker-gitconfig
