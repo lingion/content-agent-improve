@@ -1,0 +1,46 @@
+services:
+  api:
+    build: .
+    image: content-agent-api:latest
+    container_name: content-agent-api
+    restart: unless-stopped
+    # Hard memory ceiling: the whole reason for containerizing. The API,
+    # LangGraph, chromadb and all Playwright Chromium instances together
+    # cannot exceed this; on breach the container is killed and restarted
+    # instead of dragging the host into swap thrash.
+    mem_limit: 6g
+    memswap_limit: 6g          # no extra swap on top of the limit
+    pids_limit: 512            # runaway thread spawn guard
+    env_file:
+      - .env
+    environment:
+      # Backend must reach the frontend's origin for SSE; the web app runs on
+      # the host, so use the host gateway, not localhost.
+      - API_BASE_URL=http://host.docker.internal:3917
+      #容器内 localhost 指容器自己;Nano 热榜服务跑在宿主机时需要这个
+      - NANO_SEARCH_URL=http://host.docker.internal:8787/v1/search
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8918:8918"
+    volumes:
+      # SQLite db, vector store, generated images survive container rebuilds.
+      - ./data:/app/data
+      # Team article library: real git worktree so pushes work with host git
+      # config mounted below.
+      - ./articles:/app/articles
+      - ./Docker-gitconfig:/root/.gitconfig:ro
+      # Credentials for git push (article library) and gh CLI fallback.
+      # Read-only; the container never needs to modify them.
+      - ./Docker-git-credentials:/root/.git-credentials:ro
+    # Playwright needs /dev/shm bigger than the tiny default, or Chromium
+    # tabs crash on heavy pages.
+    shm_size: "1gb"
+    security_opt:
+      - seccomp:unconfined    # Chromium sandbox needs it in containers
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8918/api/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
