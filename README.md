@@ -261,6 +261,35 @@ cd web && bun dev
 uv run run.py
 ```
 
+### Docker 部署（推荐）
+
+前后端都容器化，带硬内存上限，超限自动重启容器而不是拖垮宿主机：
+
+```bash
+# 后端 API（6G 硬上限，含 Playwright Chromium）
+docker build -t content-agent-api:latest .
+docker run -d --name content-agent-api --restart unless-stopped \
+  --memory 6g --memory-swap 6g --pids-limit 512 --shm-size 1g \
+  --security-opt seccomp:unconfined \
+  --add-host host.docker.internal:host-gateway \
+  -p 8918:8918 --env-file .env \
+  -e API_BASE_URL=http://host.docker.internal:3917 \
+  -e NANO_SEARCH_URL=http://host.docker.internal:8787/v1/search \
+  -v "$PWD/data:/app/data" -v "$PWD/articles:/app/articles" \
+  -v "$PWD/Docker-gitconfig:/root/.gitconfig:ro" \
+  -v "$PWD/Docker-git-credentials:/root/.git-credentials:ro" \
+  content-agent-api:latest
+
+# 前端（2G 硬上限；构建期堆内存已用 NODE_OPTIONS 钳制）
+docker build -t content-agent-web:latest ./web
+docker run -d --name content-agent-web --restart unless-stopped \
+  --memory 2g --memory-swap 2g --pids-limit 256 \
+  -p 3917:3917 \
+  content-agent-web:latest
+```
+
+`docker-compose.yml` 与上述两条 `docker run` 等价（compose 插件未装时可当参考文档）。基础镜像与 npm 依赖均走国内镜像源（docker.1ms.run / registry.npmmirror.com）。
+
 ## Agent 执行流程
 
 ```
