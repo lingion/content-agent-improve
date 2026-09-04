@@ -32,9 +32,46 @@ from agent.tools.screenshot import SCREENSHOT_ENGINE_VERSION
 
 app = FastAPI(title="Content Agent API")
 
+
+def _start_gateway_forwarder() -> None:
+    """容器内把 127.0.0.1:4000 转发到宿主机 LiteLLM 网关。
+
+    网关证书 SAN 只含 localhost/127.0.0.1，而容器内访问宿主机只能走
+    host.docker.internal（证书主机名不匹配）。用 socat 在容器内监听
+    127.0.0.1:4000，让 LLM_BASE_URL 用 https://127.0.0.1:4000/v1 时
+    TLS 校验完整通过。宿主机直跑（无 LLM_LOCAL_FORWARD）时不启动。
+    """
+    if os.environ.get("LLM_LOCAL_FORWARD") != "1":
+        return
+    import subprocess
+
+    upstream_host = os.environ.get("LLM_FORWARD_UPSTREAM_HOST", "host.docker.internal")
+    upstream_port = int(os.environ.get("LLM_FORWARD_UPSTREAM_PORT", "4000"))
+    listen_port = int(os.environ.get("LLM_FORWARD_LISTEN_PORT", "4000"))
+
+    subprocess.Popen(
+        [
+            "socat",
+            "-d",
+            "-d",
+            f"TCP-LISTEN:{listen_port},bind=127.0.0.1,fork,reuseaddr",
+            f"TCP:{upstream_host}:{upstream_port}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    print(f"  [forward] socat 127.0.0.1:{listen_port} -> {upstream_host}:{upstream_port}")
+
+
+_start_gateway_forwarder()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3917"],
+    allow_origins=[
+        "http://localhost:3917",
+        "http://127.0.0.1:3917",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -54,8 +91,9 @@ def _check_config() -> str | None:
     """检查必要配置，返回缺失项的提示文案，都配了则返回 None"""
     if not get_config("LLM_API_KEY"):
         return "请先配置大语言模型的 API 密钥（点击左上角 ⚙ 设置）"
-    if not get_config("TAVILY_API_KEY"):
-        return "请先配置 Tavily 搜索密钥（点击左上角 ⚙ 设置，免费注册: app.tavily.com）"
+    # 搜索支持 Tavily / 本地 searXNG 二选一
+    if not get_config("TAVILY_API_KEY") and not get_config("SEARXNG_URL"):
+        return "请先配置 Tavily 搜索密钥或本地 searXNG 地址（点击左上角 ⚙ 设置）"
     return None
 
 
@@ -415,7 +453,7 @@ async def upload_image(file: UploadFile = File(...)):
 # 前端设置页需要读取的配置 key 列表
 _SETTING_KEYS = [
     "LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
-    "TAVILY_API_KEY",
+    "TAVILY_API_KEY", "SEARXNG_URL",
     "IMAGE_PROVIDER", "UNSPLASH_ACCESS_KEY", "IMAGE_API_KEY",
     "IMAGE_BASE_URL", "IMAGE_MODEL", "IMAGE_STYLE", "IMAGE_CONCURRENT",
     "WECHAT_APP_ID", "WECHAT_APP_SECRET",

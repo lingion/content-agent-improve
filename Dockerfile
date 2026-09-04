@@ -18,6 +18,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
+# socat: in-container TCP forwarder for the LiteLLM gateway whose TLS cert
+# only covers localhost/127.0.0.1 (see api/server.py _start_gateway_forwarder).
+RUN apt-get update && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+
 # Playwright browsers: base image has no browser binaries downloaded yet.
 RUN uv run playwright install chromium
 
