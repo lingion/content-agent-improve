@@ -103,7 +103,8 @@ def _highlight_code_blocks(html: str, code_theme: str = DEFAULT_CODE_THEME) -> s
             nowrap=False,
             prestyles=(
                 f"background: {bg}; padding: 16px; border-radius: 6px; "
-                f"overflow-x: auto; font-size: 14px; line-height: 1.6;"
+                f"overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; "
+                f"font-size: 14px; line-height: 1.6;"
             ),
         )
         return highlight(code, lexer, formatter)
@@ -210,6 +211,12 @@ def md_to_wechat_html(
         },
     )
     html_body = md.convert(md_text)
+
+    # Markdown treats a single newline inside a paragraph as whitespace. In
+    # WeChat, that whitespace combines with paragraph padding and makes a
+    # visually short paragraph unexpectedly tall. Preserve the author's line
+    # structure explicitly, while leaving block elements untouched.
+    html_body = re.sub(r"(?<!>)\n(?!<)", "<br>", html_body)
 
     # 2.5 图片 alt → 居中图注：将 <img alt="描述"> 包裹为 <figure> + <figcaption>
     def _img_to_figure(m):

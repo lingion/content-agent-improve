@@ -19,11 +19,23 @@ services:
       - API_BASE_URL=http://host.docker.internal:3917
       #容器内 localhost 指容器自己;Nano 热榜服务跑在宿主机时需要这个
       - NANO_SEARCH_URL=http://host.docker.internal:8787/v1/search
+      # Screenshot 反代 (CF Worker proxy.qdp.qzz.io) — env_file 加载的同名变量
+      # 因 python-dotenv 默认不覆盖已存在的环境变量而被跳过,这里直接注入。
+      # key 从宿主 ~/.proxy-secrets.env 读,启动前 source 即可;compose 用
+      # ${VAR} 语法从 docker-compose 进程的 env 插值。
+      - SCREENSHOT_PROXY=${SCREENSHOT_PROXY:-https://proxy.qdp.qzz.io/api/v1/fetch}
+      - SCREENSHOT_PROXY_KEY=${SCREENSHOT_PROXY_KEY:-}
+      - SCREENSHOT_HOST_SERVICE=${SCREENSHOT_HOST_SERVICE:-}
+      - SCREENSHOT_CHROME_EXE=/ms-playwright/chromium-1208/chrome-linux64/chrome
+      - SSL_CERT_FILE=/app/ssl/cert.pem
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8918:8918"
     volumes:
+      # Gateway CA certificate; the API client must trust the certificate
+      # actually served by the local LiteLLM gateway.
+      - /Users/lingion_k/litellm-gateway/ssl:/app/ssl:ro
       # SQLite db, vector store, generated images survive container rebuilds.
       - ./data:/app/data
       # Team article library: real git worktree so pushes work with host git

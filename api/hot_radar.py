@@ -27,6 +27,8 @@ SOURCE_URLS = {
     "贴吧": "https://tieba.baidu.com/hottopic/browse/topicList", "今日头条": "https://www.toutiao.com/hot-event/hot-board/",
     "知乎热榜": "https://www.zhihu.com/hot", "澎湃新闻": "https://www.thepaper.cn/",
     "掘金热榜": "https://juejin.cn/hot/articles", "量子位RSS": "https://www.qbitai.com/",
+    "爱范儿": "https://www.ifanr.com/", "雷锋网": "https://www.leiphone.com/",
+    "极客公园": "https://www.geekpark.net/", "少数派": "https://sspai.com/",
     "InfoQ中文": "https://www.infoq.cn/", "Solidot": "https://www.solidot.org/",
     "ProductHunt": "https://www.producthunt.com/",
 }

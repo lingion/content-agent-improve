@@ -11,12 +11,14 @@ Playwright 网页截图工具 — 截取指定 URL 的可视区域作为文章�
     python -m playwright install chromium
 """
 
+import base64
+import json
 import os
 import time
 import threading
 from dataclasses import dataclass
 from functools import wraps
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -137,11 +139,17 @@ def _is_entry_or_third_party_url(url: str) -> bool:
         return True
     if host.startswith(FORUM_HOST_PREFIXES):
         return True
-    return (
-        not path
-        or any(marker in path for marker in ENTRY_PATH_MARKERS)
-        or any(marker in path for marker in API_PAGE_MARKERS)
-    )
+    if any(marker in path for marker in ENTRY_PATH_MARKERS):
+        return True
+    if any(marker in path for marker in API_PAGE_MARKERS):
+        return True
+    # Root-URL rule intentionally removed: many official product homepages
+    # ARE the canonical feature page (e.g. kimi.com is itself the AI chat
+    # surface, notion.ai is the marketing/feature index). They were being
+    # blanket-rejected here which starved the writer/refiller pipeline of
+    # official screenshots. Visual/landing-page heuristics in the caller
+    # still filter truly blank/marketing-only shells.
+    return False
 
 
 def _is_generic_landing_page(url: str, visible_text: str) -> bool:
@@ -165,7 +173,21 @@ def preflight_screenshot_url(target_url: str) -> bool:
     if _is_entry_or_third_party_url(target_url):
         return False
     try:
-        response = _PROBE_SESSION.get(target_url, timeout=(5, 12), allow_redirects=True)
+        # When SCREENSHOT_PROXY is configured, probe through the same reverse
+        # proxy used by Chromium so the preflight reflects the same network
+        # path that the screenshot capture will actually use. Without this,
+        # domestic IP fetches time out for any host blocked behind GFW and the
+        # screenshot candidate is wrongly rejected.
+        proxy_prefix = os.environ.get("SCREENSHOT_PROXY", "").strip().rstrip("/")
+        if proxy_prefix:
+            api_key = os.environ.get("SCREENSHOT_PROXY_KEY", "").strip()
+            headers = {"User-Agent": _PROBE_SESSION.headers["User-Agent"]}
+            if api_key:
+                headers["X-API-Key"] = api_key
+            probe_url = f"{proxy_prefix}/{target_url}"
+            response = requests.get(probe_url, headers=headers, timeout=(5, 12), allow_redirects=True)
+        else:
+            response = _PROBE_SESSION.get(target_url, timeout=(5, 12), allow_redirects=True)
         if response.status_code >= 400 or response.status_code in {204, 205, 429}:
             return False
         resolved = response.url or target_url
@@ -182,6 +204,20 @@ def preflight_screenshot_url(target_url: str) -> bool:
             return False
         if any(marker in sample for marker in ("404 not found", "page not found", "页面不存在", "页面未找到")):
             return False
+        # Root-URL pages that resolve to a pure login/registration form are
+        # entry pages in disguise (notion.ai, some SaaS dashboards).
+        if urlparse(target_url).path.rstrip("/") in ("", "/"):
+            title = ""
+            lower = sample
+            title_start = lower.find("<title")
+            if title_start != -1:
+                title_open_end = lower.find(">", title_start)
+                title_close = lower.find("</title", title_open_end)
+                if title_open_end != -1 and title_close != -1:
+                    title = lower[title_open_end + 1:title_close]
+            login_title_markers = ("登录", "注册", "sign in", "log in", "sign up", "login")
+            if title and any(marker in title for marker in login_title_markers):
+                return False
         return len(sample.strip()) >= 500
     except requests.RequestException:
         return False
@@ -194,6 +230,74 @@ class ScreenshotResult:
     alt: str        # 描述文字
     credit: str     # 来源说明
     source_url: str = ""  # Playwright redirects resolved to this page
+
+
+def _write_provenance(filename: str, target_url: str, source_url: str, description: str) -> None:
+    """Persist the page provenance next to the PNG.
+
+    2026-09-24: evidence anchoring requires each article screenshot to be
+    traceable back to the page it captured. The PNG alone carries no source
+    info, so a sidecar .meta.json keeps target/final URL for downstream
+    verification (scripts/rerun_strict.py) and future audits.
+    """
+    try:
+        with open(f"{filename}.meta.json", "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "target_url": target_url,
+                    "source_url": source_url or target_url,
+                    "description": description,
+                    "captured_at": int(time.time()),
+                },
+                fh,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except OSError:
+        pass
+
+
+def _take_screenshot_remote(
+    service: str,
+    target_url: str,
+    description: str,
+    width: int,
+    height: int,
+    clip: dict | None,
+) -> ScreenshotResult | None:
+    """Call the host-side Playwright service and save the returned PNG.
+
+    The service endpoint is POST {service}/screenshot with JSON
+    {"url": ..., "width": ..., "height": ...} -> {"png_base64": ..., "final_url": ...}.
+    """
+    os.makedirs("data/images", exist_ok=True)
+    basename = f"screenshot_{int(time.time())}_{hash(target_url) % 10000:04d}.png"
+    filename = f"data/images/{basename}"
+    print(f"  [Screenshot] 远程截图: {target_url}")
+    try:
+        resp = _PROBE_SESSION.post(
+            f"{service}/screenshot",
+            json={"url": target_url, "width": width, "height": height},
+            timeout=(5, 120),
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        print(f"  [Screenshot] 远程截图失败 ({target_url}): {exc}")
+        return None
+    if not payload.get("png_base64"):
+        print(f"  [Screenshot] 远程截图无图像返回 ({target_url}): {str(payload)[:150]}")
+        return None
+    with open(filename, "wb") as fh:
+        fh.write(base64.b64decode(payload["png_base64"]))
+    alt = description or urlparse(target_url).netloc
+    _write_provenance(filename, target_url, payload.get("final_url") or target_url, description)
+    return ScreenshotResult(
+        url=filename,
+        alt=alt,
+        credit=f"Source: {urlparse(payload.get('final_url') or target_url).netloc}",
+        source_url=payload.get("final_url") or target_url,
+    )
 
 
 def take_screenshot(
@@ -222,6 +326,16 @@ def take_screenshot(
         print("  [Screenshot] playwright 未安装，请运行: uv pip install playwright && python -m playwright install chromium")
         return None
 
+    # Remote mode: delegate the actual rendering to a Playwright service on
+    # the macOS host (SCREENSHOT_HOST_SERVICE=http://host.docker.internal:8919).
+    # Chromium inside the Colima VM crashes intermittently on page load
+    # (renderer SIGSEGV), while the same binary on the host is stable; the
+    # host service also sits outside the container network so the cfp web
+    # proxy is reachable exactly as curl sees it.
+    host_service = os.environ.get("SCREENSHOT_HOST_SERVICE", "").strip().rstrip("/")
+    if host_service:
+        return _take_screenshot_remote(host_service, target_url, description, width, height, clip)
+
     os.makedirs("data/images", exist_ok=True)
     basename = f"screenshot_{int(time.time())}_{hash(target_url) % 10000:04d}.png"
     filename = f"data/images/{basename}"
@@ -232,30 +346,74 @@ def take_screenshot(
         print(f"  [Screenshot] 已跳过入口页、登录页或第三方内容页: {target_url}")
         return None
 
+    # Proxy passthrough: when SCREENSHOT_PROXY is set, Chromium loads the
+    # reverse-proxied page instead of the raw target. Two proxy shapes are
+    # supported:
+    #   * ".../api/v1/fetch"  (proxy.qdp.qzz.io gateway): raw target appended,
+    #     auth via X-API-Key (SCREENSHOT_PROXY_KEY).
+    #   * any prefix ending in "/proxy" (cfp.qdp.qzz.io web proxy): the target
+    #     is appended URI-encoded and the handler rewrites every sub-resource
+    #     URL in the HTML to stay on the proxy origin — required for full
+    #     rendering behind the GFW because the browser never contacts the
+    #     target host directly.
+    proxy_prefix = os.environ.get("SCREENSHOT_PROXY", "").strip().rstrip("/")
+    proxy_key = os.environ.get("SCREENSHOT_PROXY_KEY", "").strip()
+    if proxy_prefix:
+        if proxy_prefix.endswith("/proxy"):
+            fetch_url = f"{proxy_prefix}/{quote(target_url, safe='')}"
+        else:
+            fetch_url = f"{proxy_prefix}/{target_url}"
+        print(f"  [Screenshot] 走代理: {fetch_url[:120]}")
+    else:
+        fetch_url = target_url
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            # playwright 1.x default headless launches the chrome-headless-shell
+            # binary, which crashes on first request inside Docker (multi-process
+            # IPC race in the renderer spawn). Forcing the full chrome binary via
+            # executable_path bypasses the crashpad spawn that is missing in
+            # headless_shell's bundle layout. --single-process was tried first
+            # but breaks as soon as a second browser/page is created in the
+            # container; with shm=1gb and the full chrome binary the multi-
+            # process layout is stable.
+            chrome_exe = os.environ.get(
+                "SCREENSHOT_CHROME_EXE",
+                "/ms-playwright/chromium-1208/chrome-linux64/chrome",
+            )
+            browser = p.chromium.launch(
+                headless=True,
+                executable_path=chrome_exe,
+                args=[
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                ],
+            )
+            context = browser.new_context()
+            if proxy_key:
+                # Auth the reverse-proxy request once per browser context. The
+                # Worker accepts the X-API-Key header on the top-level GET.
+                context.set_extra_http_headers({"X-API-Key": proxy_key})
+            page = context.new_page()
             page.set_viewport_size({"width": width, "height": height})
 
-            # DOMContentLoaded is more reliable for modern docs sites than
-            # networkidle, which can wait forever on analytics/websocket calls.
-            response = None
-            try:
-                response = page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-            except Exception:
-                response = page.goto(target_url, wait_until="load", timeout=20000)
-            # Give client-side renderers enough time to paint without holding
-            # every failed candidate for the old 60-second double timeout.
-            page.wait_for_timeout(2500)
+            # DOMContentLoaded is the only wait state used. "load" waits for
+            # every sub-resource and behind the web proxy each one costs a
+            # separate Worker round-trip; a single slow chunk then trips the
+            # whole goto (or worse, crashes the renderer mid-wait). DCL fires
+            # as soon as the rewritten HTML is parsed, and the fixed sleep
+            # below gives client-side renderers time to paint.
+            response = page.goto(fetch_url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(4000)
 
             # A documentation CDN can briefly answer 429 while the browser
             # pool is warming. One delayed retry recovers transient throttling;
             # persistent 429s are rejected as unusable pages.
             if response is not None and response.status == 429:
                 page.wait_for_timeout(3000)
-                response = page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(1500)
+                response = page.goto(fetch_url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(2500)
 
             # A successful navigation can still display an HTTP error document.
             if response is not None and response.status >= 400:
@@ -337,6 +495,7 @@ def take_screenshot(
             return None
 
         print(f"  [Screenshot] 保存: {filename}")
+        _write_provenance(filename, target_url, resolved_url, description)
         alt = description or target_url
         # 返回 API 可访问的 URL，与 upload-image 端点保持一致
         api_url = f"{API_BASE_URL}/api/images/{basename}"

@@ -75,10 +75,18 @@ def _is_visually_duplicate(fingerprint: int, accepted: list[int]) -> bool:
 
 
 def _embedded_screenshot_urls(draft: str) -> set[str]:
-    """Find the local screenshots already accepted in an earlier refill pass."""
+    """Find the local screenshots already accepted in an earlier refill pass.
+
+    take_screenshot returns a local relative path (data/images/screenshot_x.png);
+    the /api/images/ prefix only exists when images are served through the API
+    server. Accept both forms so refill rounds recognize captures embedded in
+    earlier passes.
+    """
     return {
         match.group(1) for match in MARKDOWN_IMAGE_PATTERN.finditer(draft)
-        if "/api/images/screenshot_" in match.group(1)
+        if "screenshot_" in match.group(1) and (
+            "/api/images/" in match.group(1) or "data/images/" in match.group(1)
+        )
     }
 
 

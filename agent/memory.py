@@ -10,25 +10,40 @@ RAG 素材库 —— 基于 Chroma 的本地向量存储。
 
 import os
 import time
+from pathlib import Path
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 
 # 向量库存储路径
-PERSIST_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "vectorstore")
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+PERSIST_DIR = os.path.join(DATA_DIR, "vectorstore")
+EMBEDDING_CACHE_DIR = os.path.join(DATA_DIR, "embedding-model")
 
-# Embedding 模型（用和 LLM 相同的 API 配置）
-_embeddings = None
+# 本地 ONNX 模型（all-MiniLM-L6-v2，约 80 MB）。远程 LLM 网关只负责生成，
+# 向量化不再依赖一个网关未部署的 text-embedding-* 模型。
+class _LocalEmbeddingAdapter:
+    """Expose Chroma's local function through LangChain's embedding protocol."""
+
+    def __init__(self) -> None:
+        self._model = ONNXMiniLM_L6_V2()
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [[float(value) for value in vector] for vector in self._model(texts)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [float(value) for value in self._model([text])[0]]
 
 
-def _get_embeddings() -> OpenAIEmbeddings:
-    """延迟初始化 Embedding 模型，复用 LLM 的 API 配置。"""
+_embeddings: _LocalEmbeddingAdapter | None = None
+
+
+def _get_embeddings() -> _LocalEmbeddingAdapter:
+    """延迟初始化本地 ONNX embedding，并把模型缓存放在持久化 data 卷。"""
     global _embeddings
     if _embeddings is None:
-        _embeddings = OpenAIEmbeddings(
-            model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
-            openai_api_key=os.getenv("EMBEDDING_API_KEY", os.getenv("LLM_API_KEY", "")),
-            openai_api_base=os.getenv("EMBEDDING_BASE_URL", os.getenv("LLM_BASE_URL", None)),
-        )
+        os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
+        ONNXMiniLM_L6_V2.DOWNLOAD_PATH = Path(EMBEDDING_CACHE_DIR)
+        _embeddings = _LocalEmbeddingAdapter()
     return _embeddings
 
 

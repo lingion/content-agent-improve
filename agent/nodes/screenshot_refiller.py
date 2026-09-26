@@ -32,7 +32,21 @@ def _is_usable_url(url: str) -> bool:
 
 
 def _topic_query(topic: str) -> str:
-    """Reduce a long writing brief to a safe search-sized subject."""
+    """Reduce a long writing brief to a safe search-sized subject.
+
+    bing 对长中文串查询会返回完全无关的结果（实测搜 WeatherNext 3 全是
+    Apple 页面）。因此优先提取主题里的英文/品牌词（产品名、公司名），
+    只拼一个短英文 query；提取不到再退回首行截断。
+    """
+    # 品牌词：连续的英文/数字词（含大小写混合的产品名如 WeatherNext、OpenMAIC）
+    brand_tokens = re.findall(r"[A-Za-z][A-Za-z0-9.+-]{2,}", topic)
+    # 过滤常见非品牌词
+    stop = {"the", "and", "for", "with", "new", "official", "api", "demo",
+            "com", "www", "http", "https", "html"}
+    brands = [t for t in brand_tokens if t.lower() not in stop]
+    if brands:
+        # 取前 4 个品牌词（保持出现顺序），如 "WeatherNext 3 DeepMind"
+        return " ".join(brands[:4])
     title = re.search(r'文章用这个标题[“"]([^”"]+)[”"]', topic)
     if title:
         return title.group(1)[:160]
@@ -44,25 +58,49 @@ def _discover_candidates(
     topic: str,
     targets: list[tuple[int, str]],
     used_normalized: set[str],
+    raw_materials: list[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Search and preflight real pages instead of asking the LLM to invent URLs."""
+    """Search and preflight real pages instead of asking the LLM to invent URLs.
+
+    2026-09-25: candidates whose URL appears verbatim in raw_materials are
+    returned as priority candidates flagged "material" — evidence anchoring
+    (scripts/rerun_strict.py) only accepts screenshots whose URL exists in
+    raw_materials, so material-sourced candidates are the only ones that can
+    survive the checker. Search-discovered candidates remain available as a
+    fallback but rank behind material URLs.
+    """
     subject = _topic_query(topic)
     queries: list[str] = [
         f"{subject} official documentation guides",
         f"{subject} official API reference examples",
         f"{subject} official GitHub README releases",
+        f"{subject} 官方网站 功能介绍",
+        f"{subject} 官方 文档 使用",
+        f"{subject} github repo example",
     ]
-    descriptions = [description for _, description in targets if description]
-    for offset in range(0, min(len(descriptions), 4), 4):
-        focus = " ".join(descriptions[offset : offset + 4])[:240]
-        queries.append(f"{subject} {focus} 官方 文档 功能 示例")
-    if not queries:
-        queries = [f"{subject} 官方 文档 功能 示例"]
-
+    # 注意：不要把占位符描述拼进 query。描述来自 writer 对失败 URL 的注解
+    # （如"Google 香港中文首页，页脚版权…"），拼进去会把搜索带偏到无关站点。
     raw: list[tuple[str, str]] = []
+    material_items: list[tuple[str, str]] = []
     seen: set[str] = set(used_normalized)
-    for query in queries[:4]:
-        for item in search(query, max_results=10):
+
+    # 优先池：raw_materials 里出现过的 URL。证据锚定只认素材 URL，搜索
+    # 候选再"相关"也无法通过 rerun_strict 的 raw_materials 校验，所以
+    # 素材 URL 排第一梯队（预检通过后）。
+    for line in (raw_materials or []):
+        for match in re.finditer(r"https?://[^\s\"'<>)\]，。；）】」』》〉]+", line):
+            url = match.group(0).rstrip(".,;")
+            normalized = _normalize_url(url)
+            if normalized in seen or not _is_usable_url(url):
+                continue
+            seen.add(normalized)
+            title = line.split("\n", 1)[0].removeprefix("标题：").strip() or "素材页面"
+            material_items.append((url, title))
+
+    for query in queries[:6]:
+        items = search(query, max_results=10)
+        print(f"  [Refiller] 搜索 {query!r} → {len(items)} 条")
+        for item in items:
             url = str(item.get("url", "")).strip()
             normalized = _normalize_url(url) if url else ""
             if not url or normalized in seen or not _is_usable_url(url):
@@ -70,11 +108,19 @@ def _discover_candidates(
             seen.add(normalized)
             raw.append((url, str(item.get("title", "")).strip()))
 
-    if not raw:
+    if not raw and not material_items:
+        print("  [Refiller] 候选池为空（素材无 URL 且搜索 0 条）")
         return []
-    with ThreadPoolExecutor(max_workers=min(6, len(raw))) as pool:
-        checks = list(pool.map(lambda item: preflight_screenshot_url(item[0]), raw))
-    valid_items = [item for item, valid in zip(raw, checks) if valid]
+    with ThreadPoolExecutor(max_workers=min(6, len(material_items + raw))) as pool:
+        all_items = material_items + raw
+        checks = list(pool.map(lambda item: preflight_screenshot_url(item[0]), all_items))
+    valid_all = [item for item, valid in zip(all_items, checks) if valid]
+    valid_material = [item for item in valid_all[:len(material_items)]]
+    valid_items = valid_all[len(material_items):]
+    print(
+        f"  [Refiller] 预检通过 {len(valid_all)}/{len(all_items)} 个候选"
+        f"（素材直取 {len(valid_material)}）"
+    )
 
     subject_tokens = {
         token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9.-]{2,}", subject)
@@ -103,20 +149,114 @@ def _discover_candidates(
             value += 1
         return value
 
-    return sorted(valid_items, key=score, reverse=True)[:30]
+    # 硬闸：与主题品牌词毫无交集的候选（相关分 0）整批丢弃。bing 对小众
+    # 主题经常混入完全无关的结果（实测 WeatherNext 查询混入德国 ADAC
+    # 汽车过路费页，opencloak 查询混入 zhidao/淘宝页——后者会作为截图
+    # 进入文章，然后在证据锚定处被 REJECT，浪费整轮 30 分钟）。
+    relevant = [item for item in valid_items if score(item) > 1]
+    if relevant:
+        return sorted(valid_material, key=score, reverse=True) + sorted(
+            relevant, key=score, reverse=True
+        )[:30]
+    if valid_material:
+        # 搜索候选全被硬闸拦下时，素材 URL 池仍可用——它们天然与主题相关
+        # （研究员搜出来的），不经过 bing 相关分这道有噪声的闸。
+        return sorted(valid_material, key=score, reverse=True)[:30]
+    # 全部无相关且素材池为空：宁可空手回（上层会走 fail 路径）也不再放
+    # 无关候选进截图——错图进文章后被锚定校验整篇 REJECT，比缺图代价更大。
+    print("  [Refiller] 搜索候选全部与主题无关，且素材无可用 URL——放弃本轮补图")
+    return []
+
+
+def _top_up_shortfall(state: AgentState, draft: str, retry_number: int) -> dict:
+    """No failed placeholders left but captures still below the minimum.
+
+    Append fresh [SCREENSHOT:] placeholders from discovered candidates so the
+    next image_fetcher round has real work to do, instead of burning the
+    remaining budget on no-op rounds. Candidates come from raw_materials URLs
+    first (only they can pass evidence anchoring), search-pool second.
+    """
+    from agent.nodes.image_fetcher import MIN_SCREENSHOT_COUNT
+
+    already = len(_embedded_screenshot_urls(draft))
+    need = MIN_SCREENSHOT_COUNT - already
+    if need <= 0:
+        return {
+            "screenshot_retry_count": retry_number,
+            "log": state.get("log", []) + ["截图数量已达标，无需补图"],
+        }
+
+    used_urls = _embedded_screenshot_urls(draft)
+    used_urls.update(state.get("screenshot_source_urls", []))
+    used_urls.update(state.get("screenshot_attempted_urls", []))
+    used_normalized = {_normalize_url(url) for url in used_urls}
+    discovered = _discover_candidates(
+        state["topic"],
+        [],
+        used_normalized,
+        raw_materials=state.get("raw_materials") or [],
+    )
+    picks: list[tuple[str, str]] = []
+    for url, title in discovered:
+        normalized = _normalize_url(url)
+        if normalized in used_normalized:
+            continue
+        used_normalized.add(normalized)
+        picks.append((url, title or "官方功能页面"))
+        if len(picks) >= need:
+            break
+
+    if not picks:
+        return {
+            "screenshot_retry_count": retry_number,
+            "log": state.get("log", []) + [
+                f"补图第 {retry_number} 轮：无失败占位符但仅 {already} 张成功，"
+                "候选池已耗尽，无法继续补图"
+            ],
+        }
+
+    # 插入位置：优先分散到各 ## 小节标题之后（图片跟着对应内容走），
+    # 小节数不够时多余的追加到文末。倒序插入使前面的偏移量保持有效。
+    additions = [f"[SCREENSHOT: {url}, {title}]" for url, title in picks]
+    headings = list(re.finditer(r"(?m)^## .+$", draft))
+    insert_points = [h.end() for h in headings[:len(additions)]]
+    refilled_draft = draft
+    for insert_at, snippet in sorted(zip(insert_points, additions), reverse=True):
+        refilled_draft = (
+            refilled_draft[:insert_at] + "\n\n" + snippet + refilled_draft[insert_at:]
+        )
+    leftover = additions[len(insert_points):]
+    if leftover:
+        refilled_draft = refilled_draft.rstrip() + "\n\n" + "\n\n".join(leftover) + "\n"
+    print(f"  [Refiller] 截图不足（{already}/{MIN_SCREENSHOT_COUNT}），追加 {len(picks)} 个素材候选占位符")
+    return {
+        "draft": refilled_draft,
+        "screenshot_retry_count": retry_number,
+        "screenshot_retry_note": "",
+        "screenshot_attempted_urls": sorted(used_urls),
+        "log": state.get("log", []) + [
+            f"补图第 {retry_number} 轮：截图不足 {already}/{MIN_SCREENSHOT_COUNT}，"
+            f"追加 {len(picks)} 个候选占位符"
+        ],
+    }
 
 
 def screenshot_refiller_node(state: AgentState) -> dict:
-    """Replace only failed screenshot placeholders with new official-page candidates."""
+    """Replace failed screenshot placeholders, or top up when captures fall short.
+
+    2026-09-25 starvation fix: when every remaining placeholder already
+    captured successfully but the total is still below MIN_SCREENSHOT_COUNT,
+    the old code found no slots to replace and burned the remaining refill
+    budget on empty rounds (topic 64: 1 capture + 3 no-op rounds → anchored=0).
+    Now zero-slots-with-shortfall injects fresh placeholders from discovered
+    candidates instead.
+    """
     draft = state["draft"]
     slots = list(SCREENSHOT_PATTERN.finditer(draft))
     retry_number = state.get("screenshot_retry_count", 0) + 1
 
     if not slots:
-        return {
-            "screenshot_retry_count": retry_number,
-            "log": state.get("log", []) + ["没有可替换的截图位置，无法补图"],
-        }
+        return _top_up_shortfall(state, draft, retry_number)
 
     used_urls = _embedded_screenshot_urls(draft)
     used_urls.update(state.get("screenshot_source_urls", []))
@@ -135,6 +275,7 @@ def screenshot_refiller_node(state: AgentState) -> dict:
         state["topic"],
         [(index, (match.group(2) or "").strip()) for index, match in enumerate(slots, start=1)],
         used_normalized,
+        raw_materials=state.get("raw_materials") or [],
     )
     discovered_text = "\n".join(
         f"- {url} | {title or '官方页面'}" for url, title in discovered
