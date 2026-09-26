@@ -137,25 +137,20 @@ def researcher_node(state: AgentState) -> dict:
     old_materials: list[str] = state.get("raw_materials", [])
     raw_materials = new_materials + old_materials
 
-    # 铁律：素材为 0 时禁止让 LLM"整理"——LLM 会对空输入凭空编出看似完备的
-    # 假素材（本次批量实测 0 搜索结果被编成 2181 字"素材摘要"），writer 再把
-    # 假素材当真引用。空就是空，显式标记并约束 writer 只能写常识性定义。
-    if not raw_materials:
-        print("  ⚠️ 0 条素材——已跳过 LLM 整理，防止凭空编造素材")
-        context = (
-            "【搜索无结果】本轮所有搜索均失败或返回 0 条。素材为空。"
-            "写作约束：只允许写该主题的基本定义与公开常识；"
-            "禁止出现任何具体数字、版本号、日期、标准号、对比结论——"
-            "没有素材支撑的数据一律不得写。"
-        )
+    # 硬闸：没有本轮搜索素材就不能写作。此前把空结果交给 writer，
+    # 即使 prompt 禁止编造，模型仍可能用常识凑出一篇看似完整的稿子。
+    # 公众号需要最新、可核验的信息；搜不到就是失败，不生成定义型兜底文。
+    if not new_materials:
+        print("  🛑 本轮 0 条素材——终止本轮，不进入写作")
         return {
             "keywords": keywords,
-            "context": context,
+            "context": "",
             "raw_materials": [],
+            "research_failed": True,
             "log": state.get("log", [])
             + [f"🔍 补充搜索关键词：{'、'.join(keywords)}"]
             + logs
-            + ["⚠️ 搜索全部失败，素材为空（已阻止 LLM 编造素材）"],
+            + ["🛑 本轮搜索无可核验素材，已停止生成文章"],
         }
 
     print(f"  共收集 {len(raw_materials)} 条原始素材（新 {len(new_materials)} 条），开始提炼...")
