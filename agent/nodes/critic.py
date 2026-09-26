@@ -5,19 +5,48 @@ from agent.state import AgentState
 from agent.llm import get_llm
 from agent.prompts.templates import WRITING_PRINCIPLES
 
+
+def _title_evidence_violation(topic: str, context: str, draft: str) -> str:
+    """Return a hard-gate message when a factual title claim lacks evidence."""
+    title_match = re.search(r"^#\s+(.+)$", draft.strip(), re.MULTILINE)
+    if not title_match:
+        return ""
+    title = title_match.group(1)
+    # Treat numeric/date/version tokens as claims. They must occur in the
+    # evidence context, not merely in the user-supplied topic or outline.
+    claims = re.findall(r"\b(?:v?\d+(?:\.\d+){0,3}%?|\d{4}[-年/.]\d{1,2}(?:[-月/.]\d{1,2})?)\b", title, re.I)
+    missing = [claim for claim in claims if claim not in context]
+    if missing:
+        return f"标题事实缺少素材出处：{', '.join(missing)}"
+    return ""
+
+
 CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并给出改进建议。
 
 ## 重要前提
-文章中的数据、版本号、产品名称、评测分数等均来自实时网络搜索的素材（见下方【搜索素材】）。
-**不要用你自己的知识去否定文章中的具体数据和事实。**
-只在文章与素材明显矛盾、或文章内部前后数据不一致时才扣"内容准确性"分。
+- 素材里真实出现的数据、版本号、日期，不要用你自己的知识去否定（你的知识可能过时）。
+- 反过来，"素材里找不到、却出现在文章里"的具体数字/版本号/日期/标准号，按编造处理。
+- 只在文章与素材明显矛盾、或文章内部前后数据不一致时才扣"事实纪律"以外的分。
 
 ## 评分标准（满分 10 分）
-1. **内容准确性**（2分）：文章引用的数据是否与素材一致，内部是否自洽
-2. **结构完整性**（2分）：开头/正文/结尾是否完整，逻辑是否通顺
-3. **平台适配度**（2分）：语气、字数、格式是否符合目标平台风格
-4. **可读性**（2分）：表达是否流畅，是否有吸引力
-5. **信息密度**（2分）：内容是否充实，有没有空洞或注水
+1. **语言纪律**（2分·硬闸）：标题必须是中文；正文无彩色 emoji；无翻译腔句式（不是…而是…、这意味着、首先…其次…最后）；无大厂黑话（赋能/抓手/闭环/沉淀/对齐/赛道/链路/兜底）。任一命中 → 该项 0 分，总分最高 5 分，feedback 列出违规原文片段。
+   中文标题判定口径：中文主语+中文谓语、整句以中文语法骨架为主即视为中文标题；
+   括注式英文补充（如「ZCode（智谱 AI 编程工具）」）与文件名/路径/URL 片段（如 .git、README、workspace.json）不算破坏中文标题；整句英文标题或英文单词超过一半才算违规。
+2. **事实纪律**（2分·硬闸）：从文章里抽 5 个具体数字/版本号/日期/标准号/百分比，逐一到素材里找出处。素材里找不到的算编造 → 该项 0 分，总分最高 4 分，feedback 列出编造的具体内容。
+3. **证据纪律**（2分·硬闸·2026-09-24 加严）：
+   - 标题里的任何事实都必须在素材里能找到原文出处，找不到 → 该项 0 分，总分上限 6 分。
+   - 正文每个具体数字/事件/版本号后是否标注了来源（来源名 + URL），缺标注 → 扣 1 分。
+   - 每张截图 URL 是否在素材里出现，未出现 → 扣 1 分。
+   - 截图所在段落讨论内容是否与截图 URL 直接对应，错位 → 扣 1 分。
+   - 是否出现素材外的"自补"事实/数字/人物，命中 → 扣 1 分。
+4. **信息密度**（2分）：内容是否充实，有没有空洞或注水
+5. **可读性**（2分）：表达是否流畅、像人话，有没有吸引力；是否有可验证的具体数字/事件，而不是抽象判断
+6. **结构完整性**（1分）：开头/正文/结尾是否完整，逻辑是否通顺；是否在结尾出现强行总结或鸡汤式升华
+7. **平台适配度**（1分）：语气、字数、格式是否符合目标平台风格
+
+## 放行条件（2026-09-24 升级）
+- 总分必须严格 > 8 才视为通过，=8 不算通过。
+- 触发任何"硬闸"（语言/事实/证据）→ 直接不合格，反馈里逐条列出违规原文。
 
 {writing_principles}
 
@@ -34,7 +63,7 @@ CRITIC_USER = """## 目标平台：{platform}
 ## 文章规划（Planner 产出）
 {outline}
 
-## 搜索素材（Writer 的输入）
+## 搜索素材（Writer 的输入——评估文章证据时的唯一事实来源）
 {context}
 
 {history_section}
@@ -51,6 +80,20 @@ def critic_node(state: AgentState) -> dict:
     """
     retry_count = state.get("retry_count", 0)
     print(f"\n[Critic] 评估初稿（第 {retry_count + 1} 次）...")
+
+    title_violation = _title_evidence_violation(
+        state.get("topic", ""), state.get("context", ""), state.get("draft", "")
+    )
+    if title_violation:
+        # This is deterministic and must not depend on an LLM remembering the
+        # title rule. Keep the score below the pass line even if the model
+        # would otherwise rate the prose highly.
+        print(f"  [Critic] 硬闸拦截：{title_violation}")
+        return {
+            "critic_score": 3,
+            "critic_feedback": title_violation,
+            "log": state.get("log", []) + [f"🛑 {title_violation}"],
+        }
 
     # 构建历史素材部分（如果有）
     history_context = state.get("history_context", "")
@@ -74,19 +117,30 @@ def critic_node(state: AgentState) -> dict:
     ])
     raw = res.content.strip()
 
+    # 2026-09-18: 本地网关对 GPT-5.6 relay 的流式转换会吃掉响应开头的 `{"`
+    # （首 chunk 缺首字节，实测稳定复现：{"hello":"world"} → hello":"world"}）。
+    # critic 走流式 invoke，裸 {"score": ...} 必然被打残成 score": ...}。
+    # 把缺失的开头补回去，避免评分输出被误判为无法解析。
+    if raw.startswith('score"'):
+        raw = '{"' + raw
+
     # 解析 JSON — 提取最外层 {}
+    # 注意：解析失败不能默认给 7 分（通过）——那会让质量闸形同虚设。
+    # 评不出来按"未通过"处理（3 分），并把原始输出打出来便于诊断。
     json_match = re.search(r"\{.*\}", raw, re.DOTALL)
     if json_match:
         try:
             parsed = json.loads(json_match.group())
-            score = int(parsed.get("score", 7))
+            score = int(parsed.get("score", 3))
             feedback = str(parsed.get("feedback", ""))
         except (json.JSONDecodeError, ValueError, TypeError):
-            score = 7
-            feedback = "评分解析失败，默认通过"
+            score = 3
+            feedback = "评分输出无法解析，按不通过处理"
+            print(f"  [Critic] 原始输出前200字：{raw[:200]}")
     else:
-        score = 7
-        feedback = "评分解析失败，默认通过"
+        score = 3
+        feedback = "评分输出无法解析，按不通过处理"
+        print(f"  [Critic] 原始输出前200字：{raw[:200]}")
 
     score = max(1, min(10, score))
 

@@ -1,5 +1,10 @@
 import json
+import os
 import re
+from urllib.parse import quote
+
+import requests
+import trafilatura
 from langchain_core.messages import SystemMessage, HumanMessage
 from agent.state import AgentState
 from agent.tools.search import search
@@ -38,6 +43,10 @@ def _extract_keywords(state: AgentState) -> list[str]:
 
     try:
         text = res.content.strip().replace("```json", "").replace("```", "")
+        # 2026-09-18: 网关对 GPT-5.6 relay 的流式转换吃掉响应开头的 `["`，
+        # 残缺输出（kw1", "kw2"]）会让关键词解析整体失败。补回缺失的开头。
+        if text and not text.startswith(("[", "{")) and re.search(r'"\s*]', text):
+            text = '["' + text
         # 提取 JSON 数组
         match = re.search(r"\[.*\]", text, re.DOTALL)
         if match:
@@ -50,10 +59,47 @@ def _extract_keywords(state: AgentState) -> list[str]:
     return [state["topic"]]
 
 
+def _full_page_text(url: str) -> str:
+    """Fetch and extract the readable body for an evidence URL.
+
+    Search snippets are discovery metadata, not sufficient evidence for a
+    factual article. The CFP proxy is optional: when unavailable, the original
+    snippet remains usable and the search result is never discarded.
+    """
+    if not url or url.startswith(("javascript:", "data:")):
+        return ""
+    proxy = os.getenv("RESEARCH_PROXY_URL", "https://cfp.qdp.qzz.io/proxy").rstrip("/")
+    target = f"{proxy}/{quote(url, safe='')}"
+    try:
+        response = requests.get(
+            target,
+            headers={"User-Agent": "Mozilla/5.0 (content-agent research)"},
+            timeout=(10, 90),
+        )
+        response.raise_for_status()
+        text = trafilatura.extract(response.text, include_links=True, include_tables=True)
+        return (text or "").strip()
+    except Exception as exc:  # noqa: BLE001 - search result remains valid on fetch failure
+        print(f"  [Researcher] 正文抓取失败，保留搜索摘要：{url} ({type(exc).__name__})")
+        return ""
+
+
+def _material_from_result(result: dict) -> str:
+    url = str(result.get("url", "")).strip()
+    snippet = str(result.get("content", "")).strip()
+    full_text = _full_page_text(url)
+    evidence = full_text[:18000] if full_text else snippet
+    return (
+        f"标题：{result.get('title', '无标题')}\n"
+        f"内容：{evidence}\n"
+        f"来源：{url}"
+    )
+
+
 def researcher_node(state: AgentState) -> dict:
     """
     1. 拆解搜索关键词（基于主题+规划+critic反馈）
-    2. 对每个关键词执行搜索
+    2. 对每个关键词执行搜索并抓取命中页面正文
     3. LLM 去重提炼成素材摘要
     """
     retry_count = state.get("retry_count", 0)
@@ -76,22 +122,41 @@ def researcher_node(state: AgentState) -> dict:
     new_materials: list[str] = []
 
     # Step 1: 逐个关键词搜索（基于 outline 的精准补充搜索）
+    # max_results=8：截图模式要求 12 个不同 URL 候选、最终至少 5 张成功，
+    # 每词只搜 4 条时素材池太小，writer 拿不到足够多的真实页面 URL。
     for keyword in keywords:
         print(f"  搜索：{keyword}")
-        results = search(keyword, max_results=4)
+        results = search(keyword, max_results=8)
 
         for r in results:
-            new_materials.append(
-                f"标题：{r.get('title', '无标题')}\n"
-                f"内容：{r.get('content', '')}\n"
-                f"来源：{r.get('url', '')}"
-            )
+            new_materials.append(_material_from_result(r))
 
         logs.append(f"📰 \"{keyword}\" 找到 {len(results)} 条结果")
 
     # 合并素材：新搜索 + 预搜索/上轮素材
     old_materials: list[str] = state.get("raw_materials", [])
     raw_materials = new_materials + old_materials
+
+    # 铁律：素材为 0 时禁止让 LLM"整理"——LLM 会对空输入凭空编出看似完备的
+    # 假素材（本次批量实测 0 搜索结果被编成 2181 字"素材摘要"），writer 再把
+    # 假素材当真引用。空就是空，显式标记并约束 writer 只能写常识性定义。
+    if not raw_materials:
+        print("  ⚠️ 0 条素材——已跳过 LLM 整理，防止凭空编造素材")
+        context = (
+            "【搜索无结果】本轮所有搜索均失败或返回 0 条。素材为空。"
+            "写作约束：只允许写该主题的基本定义与公开常识；"
+            "禁止出现任何具体数字、版本号、日期、标准号、对比结论——"
+            "没有素材支撑的数据一律不得写。"
+        )
+        return {
+            "keywords": keywords,
+            "context": context,
+            "raw_materials": [],
+            "log": state.get("log", [])
+            + [f"🔍 补充搜索关键词：{'、'.join(keywords)}"]
+            + logs
+            + ["⚠️ 搜索全部失败，素材为空（已阻止 LLM 编造素材）"],
+        }
 
     print(f"  共收集 {len(raw_materials)} 条原始素材（新 {len(new_materials)} 条），开始提炼...")
 
@@ -108,7 +173,10 @@ def researcher_node(state: AgentState) -> dict:
             "3. 保留所有人名、公司名、产品名、技术术语\n"
             "4. 保留有价值的直接引语和关键表述\n"
             "5. 保留来源 URL（写作时可用于引用）\n"
-            "6. 输出结构清晰的素材摘要，1000~1500字\n"
+            "6. 每条可核验事实必须紧跟来源名+完整原始 URL（写作器会据此核对锚点）："
+            "禁止只写素材编号、域名或\"某报道\"。\n"
+            "7. URL 必须逐字复制自输入的搜索结果，不得改写、补全、猜测或生成输入中不存在的 URL。\n"
+            "8. 输出结构清晰的素材摘要，1000~1500字；即使压缩内容，也不得删除事实对应的来源 URL。\n"
             "宁可多保留信息，也不要过度压缩。直接输出摘要内容，不要加前缀说明。"
         )),
         HumanMessage(content=(
@@ -120,7 +188,20 @@ def researcher_node(state: AgentState) -> dict:
     ])
 
     context = summary_res.content.strip()
-    print(f"  素材摘要完成（{len(context)}字）")
+    # 摘要模型可能为了满足字数上限删掉 URL，即使 prompt 已要求保留。
+    # 将原始结果中的 URL 做确定性尾部索引，保证证据锚点与截图候选永不丢失。
+    source_urls = []
+    for material in raw_materials:
+        source = re.search(r"^来源：(.+)$", material, re.MULTILINE)
+        url = source.group(1).strip() if source else ""
+        if url and url not in source_urls:
+            source_urls.append(url)
+    missing_urls = [url for url in source_urls if url not in context]
+    if missing_urls:
+        context += "\n\n【原始来源 URL（摘要模型不得删除）】\n" + "\n".join(
+            f"- {url}" for url in missing_urls
+        )
+    print(f"  素材摘要完成（{len(context)}字，来源 URL {len(source_urls)} 条）")
 
     return {
         "keywords": keywords,

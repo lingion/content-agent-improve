@@ -248,6 +248,10 @@ SOURCES = [
     ("🥉 T3 发现", "掘金热榜", src_juejin),
     ("🥉 T3 发现", "量子位RSS", lambda: src_rss("https://www.qbitai.com/feed")),
     ("🥉 T3 发现", "InfoQ中文", lambda: src_rss("https://www.infoq.cn/feed")),
+    ("🥈 T2 验证", "爱范儿", lambda: src_rss("https://www.ifanr.com/feed")),
+    ("🥉 T3 发现", "雷锋网", lambda: src_rss("https://www.leiphone.com/feed")),
+    ("🥉 T3 发现", "极客公园", lambda: src_rss("https://www.geekpark.net/rss")),
+    ("🥉 T3 发现", "少数派", lambda: src_rss("https://sspai.com/feed")),
     ("🥉 T3 发现", "Solidot", lambda: src_rss("https://www.solidot.org/index.rss")),
     ("🎒 备用", "ProductHunt", lambda: src_rss("https://www.producthunt.com/feed", atom=True)),
 ]

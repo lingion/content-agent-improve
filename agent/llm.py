@@ -71,21 +71,38 @@ def _make_openai(api_key: str, model: str, reasoning_effort: str | None = None) 
         connect_timeout = float(get_config("LLM_CONNECT_TIMEOUT_SECONDS", "30"))
     except ValueError:
         connect_timeout = 30.0
-    try:
-        max_retries = max(0, int(get_config("LLM_MAX_RETRIES", "3")))
-    except ValueError:
-        max_retries = 3
+    # openai SDK 会对 httpx.ReadTimeout 自动整请求重发（_base_client.py 里
+    # TimeoutException → continue），max_retries=3 意味着一次死流最坏
+    # 4×read_timeout 才抛出。读超时说明流已死，SDK 级重试只会把挂死时间
+    # 乘 4；重试交由上层（writer 的 stream→invoke 兜底、graph 的 critic
+    # 重写循环）自己做，这里固定为 0。
+    max_retries = 0
 
     kwargs = dict(
         api_key=api_key,
         model=model,
         max_retries=max_retries,
-        timeout=(connect_timeout, read_timeout),
+        # langchain-openai 1.x 的字段名是 request_timeout（pydantic 字段）。
+        # 之前传 timeout= 会被 pydantic 静默丢弃，超时从未生效，
+        # 流式响应在中间链路断流时会无限期挂死。
+        request_timeout=(connect_timeout, read_timeout),
     )
     if base_url:
         kwargs["base_url"] = base_url
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
+    # 本地 litellm 网关的 router 默认 per-attempt timeout 是 15s（config.yaml
+    # router_settings.timeout，为 auto 组快失败而设）。直连模型组（如
+    # GPT-5.6-Terra）的长文生成首字节常超 15s，网关会以 litellm.Timeout
+    # 408 拒绝。请求体里的 timeout 字段可覆盖该默认（litellm proxy 读取
+    # body 级 timeout），因此把读超时同样传给网关，让单次 attempt 的
+    # 预算与客户端读超时一致。
+    if get_config("LLM_BASE_URL"):
+        kwargs["extra_body"] = {"timeout": read_timeout}
+        # 部分上游部署前置 Cloudflare（524 = origin 120s 无完整响应）。非流式
+        # 长生成必然触发；流式让字节持续流动即可绕开。streaming=True 使
+        # .invoke() 也走 SSE 聚合，与 .stream() 同路径。
+        kwargs["streaming"] = True
 
     print(f"  [LLM] OpenAI 规范 | model={model} | base_url={base_url or '(default)'}")
     return ChatOpenAI(**kwargs)
