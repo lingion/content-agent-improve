@@ -45,3 +45,4 @@ class AgentState(TypedDict):
     needs_screenshot_retry: NotRequired[bool]  # 是否需要重新生成截图候选
     screenshot_source_urls: NotRequired[list[str]]  # 已接受截图的最终页面 URL
     screenshot_attempted_urls: NotRequired[list[str]]  # 本次生成已尝试过的候选，跨补图轮次去重
+    research_failed: NotRequired[bool]  # 没有可核验的本轮搜索素材时硬性终止

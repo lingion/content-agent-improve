@@ -51,6 +51,22 @@ def should_retry(state: AgentState) -> str:
         return "fail"
 
 
+def should_continue_after_research(state: AgentState) -> str:
+    """Only enter Writer after this round found current search material."""
+    return "fail" if state.get("research_failed") else "pass"
+
+
+def research_requirement_failed(state: AgentState) -> dict:
+    """Stop before Writer when no current, verifiable search material exists."""
+    return {
+        "final_article": "",
+        "critic_score": 0,
+        "log": state.get("log", []) + [
+            "素材要求未满足：没有可核验的最新公开信息，已停止交付。"
+        ],
+    }
+
+
 def save_memory_node(state: AgentState) -> dict:
     """文章生成完毕后，把素材存入向量库供未来检索。"""
     print("\n[Memory] 保存素材到向量库...")
@@ -120,6 +136,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("pre_researcher", pre_researcher_node)
 workflow.add_node("planner", planner_node)
 workflow.add_node("researcher", researcher_node)
+workflow.add_node("research_requirement_failed", research_requirement_failed)
 workflow.add_node("writer", writer_node)
 workflow.add_node("critic", critic_node)
 workflow.add_node("paraphraser", paraphraser_node)
@@ -134,7 +151,11 @@ workflow.add_node("save_memory", save_memory_node)
 workflow.set_entry_point("pre_researcher")
 workflow.add_edge("pre_researcher", "planner")
 workflow.add_edge("planner", "researcher")
-workflow.add_edge("researcher", "writer")
+workflow.add_conditional_edges(
+    "researcher",
+    should_continue_after_research,
+    {"fail": "research_requirement_failed", "pass": "writer"},
+)
 workflow.add_edge("writer", "critic")
 
 # 条件分支：Critic 之后
@@ -166,6 +187,7 @@ workflow.add_edge("screenshot_refiller", "image_fetcher")
 workflow.add_edge("save_memory", END)
 workflow.add_edge("screenshot_requirement_failed", END)
 workflow.add_edge("score_requirement_failed", END)
+workflow.add_edge("research_requirement_failed", END)
 
 graph = workflow.compile()
 
@@ -196,6 +218,7 @@ def _initial_state() -> dict:
         "needs_screenshot_retry": False,
         "screenshot_source_urls": [],
         "screenshot_attempted_urls": [],
+        "research_failed": False,
     }
 
 
@@ -222,6 +245,7 @@ _NEXT_NODE = {
     "pre_researcher": "planner",
     "planner": "researcher",
     "researcher": "writer",
+    "research_requirement_failed": "",
     "writer": "critic",
     "paraphraser": "image_fetcher",
     "image_fetcher": "save_memory",
@@ -260,6 +284,8 @@ def run_stream(topic: str, platform: Platform, direction: str = "tech", image_st
                     active = "researcher"
                 else:
                     active = "paraphraser"
+            elif node_name == "researcher" and node_output.get("research_failed"):
+                active = "research_requirement_failed"
             elif node_name == "image_fetcher":
                 if node_output.get("needs_screenshot_retry"):
                     active = "screenshot_refiller"

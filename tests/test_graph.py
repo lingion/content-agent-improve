@@ -48,6 +48,47 @@ class ScoreGateTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class ResearchHardGateTests(unittest.TestCase):
+    """本轮搜索 0 素材 → 直接失败，禁止进入 Writer 写兜底稿。"""
+
+    def test_researcher_returns_research_failed_on_zero_new_materials(self):
+        from agent.nodes.researcher import researcher_node
+
+        with (
+            patch("agent.nodes.researcher._extract_keywords", return_value=["kw"]),
+            patch("agent.nodes.researcher.search", return_value=[]),
+        ):
+            result = researcher_node({
+                "topic": "测试主题",
+                "platform": "wechat",
+                "raw_materials": [],
+                "log": [],
+            })
+        self.assertTrue(result["research_failed"])
+        self.assertEqual(result["raw_materials"], [])
+        self.assertEqual(result["context"], "")
+
+    def test_researcher_marks_failed_even_with_stale_materials(self):
+        from agent.nodes.researcher import researcher_node
+
+        with (
+            patch("agent.nodes.researcher._extract_keywords", return_value=["kw"]),
+            patch("agent.nodes.researcher.search", return_value=[]),
+        ):
+            result = researcher_node({
+                "topic": "测试主题",
+                "platform": "wechat",
+                "raw_materials": ["标题：旧素材\n内容：旧内容\n来源：https://example.com"],
+                "log": [],
+            })
+        self.assertTrue(result["research_failed"])
+
+    def test_gate_routes_fail_and_pass_correctly(self):
+        from agent.graph import should_continue_after_research
+
+        self.assertEqual(should_continue_after_research({"research_failed": True}), "fail")
+        self.assertEqual(should_continue_after_research({"research_failed": False}), "pass")
+
 class TitleEvidenceGateTests(unittest.TestCase):
     def test_title_numeric_claim_missing_from_context_is_blocked(self):
         from agent.nodes.critic import _title_evidence_violation
