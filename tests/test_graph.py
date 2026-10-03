@@ -21,7 +21,7 @@ class SaveMemoryNodeTests(unittest.TestCase):
 
 
 class ScoreGateTests(unittest.TestCase):
-    """质量线 >8：9/10 放行，8 及以下回炉或判失败。"""
+    """质量线 >=8：8 分及以上放行，低于 8 分回炉或判失败。"""
 
     def test_score_9_passes(self):
         self.assertEqual(should_retry({"critic_score": 9, "retry_count": 0}), "pass")
@@ -29,14 +29,14 @@ class ScoreGateTests(unittest.TestCase):
     def test_score_10_passes(self):
         self.assertEqual(should_retry({"critic_score": 10, "retry_count": 0}), "pass")
 
-    def test_score_8_retries(self):
-        self.assertEqual(should_retry({"critic_score": 8, "retry_count": 0}), "retry")
+    def test_score_8_passes(self):
+        self.assertEqual(should_retry({"critic_score": 8, "retry_count": 0}), "pass")
 
     def test_score_7_retries(self):
         self.assertEqual(should_retry({"critic_score": 7, "retry_count": 0}), "retry")
 
-    def test_score_8_fails_after_retry_budget(self):
-        self.assertEqual(should_retry({"critic_score": 8, "retry_count": 2}), "fail")
+    def test_score_8_passes_after_retry_budget(self):
+        self.assertEqual(should_retry({"critic_score": 8, "retry_count": 2}), "pass")
 
     def test_score_5_fails_after_retry_budget(self):
         self.assertEqual(should_retry({"critic_score": 5, "retry_count": 2}), "fail")

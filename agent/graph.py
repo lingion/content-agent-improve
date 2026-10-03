@@ -22,8 +22,8 @@ from agent.memory import save as save_to_memory
 #
 # 节点执行顺序：
 #   pre_researcher → planner → researcher → writer → critic → 条件分支：
-#     - score > 8 或 retry ≥ 2 → image_fetcher → END
-#     - score ≤ 8 且 retry < 2  → 回到 researcher 重写
+#     - score ≥ 8 或 retry ≥ 2 → image_fetcher → END
+#     - score < 8 且 retry < 2  → 回到 researcher 重写
 #
 # ─────────────────────────────────────────────────────────
 
@@ -38,16 +38,17 @@ def should_retry(state: AgentState) -> str:
     score = state.get("critic_score", 7)
     retry_count = state.get("retry_count", 0)
 
-    if score <= 8 and retry_count < 2:
+    if score < 8 and retry_count < 2:
         print(f"\n⚠️  评分 {score}/10，未过 8 分线，准备第 {retry_count + 2} 次重写...")
         return "retry"
     else:
-        if score > 8:
+        if score >= 8:
             print(f"\n✅ 评分 {score}/10，质量达标，进入配图阶段")
             return "pass"
-        # 2026-09-23: retry 上限到达仍 ≤8 分时不再静默放行——低分稿
+        # 2026-09-23: retry 上限到达仍 <8 分时不再静默放行——低分稿
         # 曾以此路径进过草稿箱。降级为 fail,让上层可见并决定去留。
-        print(f"\n🛑 评分 {score}/10，已达最大重试次数且仍未过 8 分线，标记失败")
+        # 2026-09-27: 质量线从 >8 回调为 ≥8,8 分稿允许交付。
+        print(f"\n🛑 评分 {score}/10，已达最大重试次数且仍未过 8 分线（≥8 放行），标记失败")
         return "fail"
 
 
@@ -280,7 +281,7 @@ def run_stream(topic: str, platform: Platform, direction: str = "tech", image_st
             # 计算当前正在运行的节点（下一个节点）
             if node_name == "critic":
                 score = node_output.get("critic_score", 7)
-                if score <= 8 and retry_count < 2:
+                if score < 8 and retry_count < 2:
                     active = "researcher"
                 else:
                     active = "paraphraser"
