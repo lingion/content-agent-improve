@@ -15,7 +15,7 @@ interface Props {
 
 export function HotTopicsPanel({ onUseTitle, onExplore, disabled = false }: Props) {
   const [topics, setTopics] = useState<HotTopic[]>([]);
-  const [canonical, setCanonical] = useState("https://aihot.virxact.com/hot");
+  const [canonical, setCanonical] = useState("https://aihot.news/");
   const [provider, setProvider] = useState<"aihot" | "hot-radar">("aihot");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
