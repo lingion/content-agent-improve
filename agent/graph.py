@@ -22,26 +22,50 @@ from agent.memory import save as save_to_memory
 #
 # 节点执行顺序：
 #   pre_researcher → planner → researcher → writer → critic → 条件分支：
-#     - score ≥ 7 或 retry ≥ 2 → paraphraser → image_fetcher → END
-#     - score < 7 且 retry < 2  → 回到 researcher 重写
+#     - score ≥ 8 或 retry ≥ 2 → image_fetcher → END
+#     - score < 8 且 retry < 2  → 回到 researcher 重写
 #
 # ─────────────────────────────────────────────────────────
 
 
 def should_retry(state: AgentState) -> str:
-    """Critic 之后的条件分支：决定是否重写。"""
+    """Critic 之后的条件分支：决定是否重写。
+
+    2026-09-23: 质量线由 ≥7 提到 >8(即 9~10 才放行)。8 分稿此前能直接进
+    草稿箱,用户判定"效果非常差"——把线抬到 critic 只剩 9/10 两档可过,
+    8 分及以下一律回炉,重试用尽仍不达标走 fail 节点。
+    """
     score = state.get("critic_score", 7)
     retry_count = state.get("retry_count", 0)
 
-    if score < 7 and retry_count < 2:
-        print(f"\n⚠️  评分 {score}/10，不达标，准备第 {retry_count + 2} 次重写...")
+    if score < 8 and retry_count < 2:
+        print(f"\n⚠️  评分 {score}/10，未过 8 分线，准备第 {retry_count + 2} 次重写...")
         return "retry"
     else:
-        if score >= 7:
-            print(f"\n✅ 评分 {score}/10，质量达标，进入全文改写阶段")
-        else:
-            print(f"\n⚠️  评分 {score}/10，已达最大重试次数，跳过重写")
-        return "pass"
+        if score >= 8:
+            print(f"\n✅ 评分 {score}/10，质量达标，进入配图阶段")
+            return "pass"
+        # 2026-09-23: retry 上限到达仍 <8 分时不再静默放行——低分稿
+        # 曾以此路径进过草稿箱。降级为 fail,让上层可见并决定去留。
+        # 2026-09-27: 质量线从 >8 回调为 ≥8,8 分稿允许交付。
+        print(f"\n🛑 评分 {score}/10，已达最大重试次数且仍未过 8 分线（≥8 放行），标记失败")
+        return "fail"
+
+
+def should_continue_after_research(state: AgentState) -> str:
+    """Only enter Writer after this round found current search material."""
+    return "fail" if state.get("research_failed") else "pass"
+
+
+def research_requirement_failed(state: AgentState) -> dict:
+    """Stop before Writer when no current, verifiable search material exists."""
+    return {
+        "final_article": "",
+        "critic_score": 0,
+        "log": state.get("log", []) + [
+            "素材要求未满足：没有可核验的最新公开信息，已停止交付。"
+        ],
+    }
 
 
 def save_memory_node(state: AgentState) -> dict:
@@ -94,12 +118,26 @@ def screenshot_requirement_failed(state: AgentState) -> dict:
     }
 
 
+def score_requirement_failed(state: AgentState) -> dict:
+    """2026-09-23: critic retry 上限到达仍 ≤8 分 → 失败节点,不再静默放行到草稿箱。
+    与 screenshot_requirement_failed 同形(final_article="" + log 行),但文案独立,
+    不再让发布流误以为是图问题。"""
+    score = state.get("critic_score", 0)
+    return {
+        "final_article": "",
+        "log": state.get("log", []) + [
+            f"质量门槛未通过：critic 评分 {score}/10，已达最大重试次数仍未超过 8 分。已停止交付，避免低分稿进草稿箱。"
+        ],
+    }
+
+
 workflow = StateGraph(AgentState)
 
 # 注册节点
 workflow.add_node("pre_researcher", pre_researcher_node)
 workflow.add_node("planner", planner_node)
 workflow.add_node("researcher", researcher_node)
+workflow.add_node("research_requirement_failed", research_requirement_failed)
 workflow.add_node("writer", writer_node)
 workflow.add_node("critic", critic_node)
 workflow.add_node("paraphraser", paraphraser_node)
@@ -107,13 +145,18 @@ workflow.add_node("increment_retry", increment_retry)
 workflow.add_node("image_fetcher", image_fetcher_node)
 workflow.add_node("screenshot_refiller", screenshot_refiller_node)
 workflow.add_node("screenshot_requirement_failed", screenshot_requirement_failed)
+workflow.add_node("score_requirement_failed", score_requirement_failed)
 workflow.add_node("save_memory", save_memory_node)
 
 # 连接边
 workflow.set_entry_point("pre_researcher")
 workflow.add_edge("pre_researcher", "planner")
 workflow.add_edge("planner", "researcher")
-workflow.add_edge("researcher", "writer")
+workflow.add_conditional_edges(
+    "researcher",
+    should_continue_after_research,
+    {"fail": "research_requirement_failed", "pass": "writer"},
+)
 workflow.add_edge("writer", "critic")
 
 # 条件分支：Critic 之后
@@ -122,7 +165,12 @@ workflow.add_conditional_edges(
     should_retry,
     {
         "retry": "increment_retry",
-        "pass": "paraphraser",
+        # 2026-09-09: 绕过 paraphraser——外部改写接口(rapi.ycjg.top aimove preset)
+        # 会把正常中文改成"代理人/摄影师AI"式机器腔,且偶发整篇改空。
+        # 中文人味纪律已前移到 writer prompt(ZH_DISCIPLINE),改写层不再需要。
+        "pass": "image_fetcher",
+        # 2026-09-23: retry 上限到仍未达标 → 失败节点,不再静默放行到草稿箱
+        "fail": "score_requirement_failed",
     },
 )
 workflow.add_edge("increment_retry", "researcher")
@@ -139,6 +187,8 @@ workflow.add_conditional_edges(
 workflow.add_edge("screenshot_refiller", "image_fetcher")
 workflow.add_edge("save_memory", END)
 workflow.add_edge("screenshot_requirement_failed", END)
+workflow.add_edge("score_requirement_failed", END)
+workflow.add_edge("research_requirement_failed", END)
 
 graph = workflow.compile()
 
@@ -169,6 +219,7 @@ def _initial_state() -> dict:
         "needs_screenshot_retry": False,
         "screenshot_source_urls": [],
         "screenshot_attempted_urls": [],
+        "research_failed": False,
     }
 
 
@@ -195,11 +246,13 @@ _NEXT_NODE = {
     "pre_researcher": "planner",
     "planner": "researcher",
     "researcher": "writer",
+    "research_requirement_failed": "",
     "writer": "critic",
     "paraphraser": "image_fetcher",
     "image_fetcher": "save_memory",
     "screenshot_refiller": "image_fetcher",
     "screenshot_requirement_failed": "",
+    "score_requirement_failed": "",
     "save_memory": "",
 }
 
@@ -228,10 +281,12 @@ def run_stream(topic: str, platform: Platform, direction: str = "tech", image_st
             # 计算当前正在运行的节点（下一个节点）
             if node_name == "critic":
                 score = node_output.get("critic_score", 7)
-                if score < 7 and retry_count < 2:
+                if score < 8 and retry_count < 2:
                     active = "researcher"
                 else:
                     active = "paraphraser"
+            elif node_name == "researcher" and node_output.get("research_failed"):
+                active = "research_requirement_failed"
             elif node_name == "image_fetcher":
                 if node_output.get("needs_screenshot_retry"):
                     active = "screenshot_refiller"

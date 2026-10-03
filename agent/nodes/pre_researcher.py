@@ -23,6 +23,35 @@ def _search_query(topic: str) -> str:
     return " ".join(([head[:180]] if head else []) + urls[:1])
 
 
+def _full_page_text(url: str) -> str:
+    """Fetch and extract the readable body for an evidence URL.
+    CFP proxy first; direct fetch as fallback when proxy fails.
+    """
+    import requests, trafilatura
+    from urllib.parse import quote
+    if not url or url.startswith(("javascript:", "data:")):
+        return ""
+    proxy = "https://cfp.qdp.qzz.io/proxy"
+    # Try CFP proxy first
+    try:
+        target = f"{proxy}/{quote(url, safe='')}"
+        response = requests.get(target, headers={"User-Agent": "Mozilla/5.0 (content-agent research)"}, timeout=(10, 60))
+        response.raise_for_status()
+        text = trafilatura.extract(response.text, include_links=True, include_tables=True)
+        if text and len(text) > 200:
+            return text.strip()
+    except Exception:
+        pass
+    # Direct fetch fallback
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (content-agent research)"}, timeout=(10, 60))
+        response.raise_for_status()
+        text = trafilatura.extract(response.text, include_links=True, include_tables=True)
+        return (text or "").strip()
+    except Exception:
+        return ""
+
+
 def pre_researcher_node(state: AgentState) -> dict:
     """基于主题做初步搜索 + RAG 检索，为 Planner 提供实时信息。"""
     topic = state["topic"]
@@ -32,13 +61,16 @@ def pre_researcher_node(state: AgentState) -> dict:
     logs: list[str] = []
     raw_materials: list[str] = []
 
-    # 1. 搜索实时资讯
-    results = search(query, max_results=4)
+    # 1. 搜索实时资讯（max_results=8，加正文抓取）
+    results = search(query, max_results=8)
     for r in results:
+        url = r.get("url", "")
+        full_text = _full_page_text(url) if url else ""
+        content = full_text[:18000] if full_text else r.get("content", "")
         raw_materials.append(
             f"标题：{r.get('title', '无标题')}\n"
-            f"内容：{r.get('content', '')}\n"
-            f"来源：{r.get('url', '')}"
+            f"内容：{content}\n"
+            f"来源：{url}"
         )
     logs.append(f"📰 预搜索 \"{query}\" 找到 {len(results)} 条结果")
     print(f"  搜索到 {len(results)} 条结果")
