@@ -474,7 +474,10 @@ def take_screenshot(
                 page.wait_for_timeout(500)
 
             # 截图
-            screenshot_opts: dict = {"path": filename}
+            # Chromium can leave page.screenshot waiting forever when a proxy
+            # renderer dies after navigation. Bound each capture so one URL
+            # cannot stall the whole article batch.
+            screenshot_opts: dict = {"path": filename, "timeout": 15000}
             if clip:
                 screenshot_opts["clip"] = clip
             else:
