@@ -224,7 +224,7 @@ LLM_MODEL=claude-sonnet-4-6
 
 ```bash
 # 终端 1 — Python API
-uv run uvicorn api.server:app --reload --port 8917
+uv run uvicorn api.server:app --reload --port 8918
 
 # 终端 2 — Next.js 前端
 cd web && bun dev
