@@ -3,6 +3,7 @@ from agent.state import AgentState
 from agent.prompts.templates import build_prompt
 from agent.llm import get_llm
 from agent.config import get_config
+from agent.tools.style_guard import strip_translationese
 import re
 
 
@@ -37,6 +38,7 @@ def writer_node(state: AgentState) -> dict:
         direction=state.get("direction", ""),
         outline=state.get("outline", ""),
         image_mode=image_mode,
+        critic_feedback=state.get("critic_feedback", ""),
     )
     # 应用层超时（对抗"活流挂死"）：httpx 的 read timeout 只在 socket 层无字节时
     # 触发，而网关/上游在卡死时仍持续发 SSE 心跳字节，socket 永远有数据 →
@@ -124,6 +126,12 @@ def writer_node(state: AgentState) -> dict:
             )
             res = get_llm().invoke([HumanMessage(content=prompt + count_prompt)])
             draft = res.content.strip()
+
+    # 消除翻译腔句式：prompt 层面的禁令压不住模型的语言惯性，
+    # 这里在交付 critic 之前做一次确定性检测 + 局部重写，只动命中的行。
+    draft, changed_lines = strip_translationese(draft)
+    if changed_lines:
+        print(f"  [StyleGuard] 通读改写 {changed_lines} 行")
 
     # 统计占位符数量，方便调试
     import re
