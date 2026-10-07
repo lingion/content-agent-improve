@@ -1,0 +1,64 @@
+import unittest
+
+from agent.tools.style_guard import _check_safe, find_violations
+
+
+class TranslationeseDetectionTests(unittest.TestCase):
+    def test_detects_common_variants(self):
+        cases = [
+            "企业缺的不是更强的模型，而是能进现场的工程师",
+            "FDE不是高级实施，是一个新岗位",
+            "关键不在四段本身，而在执行的决策权",
+            "与其说这是技术问题，不如说是组织问题",
+            # 倒装与"不在于"变体：只写前向模式会漏掉这两类
+            "FDE落地是一个工程问题，不是采购问题",
+            "区别不在于技术栈，在于谁掌握决策权",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(len(find_violations(text)), 1)
+
+    def test_plain_negation_is_not_flagged(self):
+        cases = [
+            "这不是问题。",
+            "他并不是工程师。",
+            "系统不支持该接口。",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(find_violations(text), [])
+
+    def test_does_not_cross_sentence_boundary(self):
+        # "不是" 与 "而是" 分处两句时不算违规，否则会误伤正常行文。
+        text = "这不是重点。而是我们忽略了另一个问题。"
+        self.assertEqual(find_violations(text), [])
+
+    def test_reports_line_index(self):
+        text = "第一行正常\n企业缺的不是模型，而是工程师\n第三行正常"
+        self.assertEqual(find_violations(text), [(1, "企业缺的不是模型，而是工程师")])
+
+
+class SafetyCheckTests(unittest.TestCase):
+    def test_accepts_faithful_rewrite(self):
+        original = "第一行\n企业缺的不是模型，而是工程师\n第三行"
+        candidate = "第一行\n企业真正缺的是工程师，模型并非瓶颈\n第三行"
+        ok, reason = _check_safe(original, candidate)
+        self.assertTrue(ok, reason)
+
+    def test_rejects_line_count_change(self):
+        ok, reason = _check_safe("第一行\n第二行", "只剩一行了")
+        self.assertFalse(ok)
+        self.assertIn("行数", reason)
+
+    def test_rejects_empty_result(self):
+        ok, _ = _check_safe("原文内容", "   ")
+        self.assertFalse(ok)
+
+    def test_rejects_length_drift(self):
+        ok, reason = _check_safe("这是一行足够长的原文内容用来撑起长度基准", "短")
+        self.assertFalse(ok)
+        self.assertIn("长度", reason)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -58,7 +58,7 @@ WRITING_PRINCIPLES = """
 3. 具体胜过抽象："3天完成"比"很快完成"好，"节省60%时间"比"大幅节省时间"好
 4. 保留金句：素材中有力的表述和数据要原样保留，不要弱化
 5. 每段只讲一件事，段与段之间有清晰的逻辑衔接
-6. 有态度有观点：你不是在搬运信息，而是在解读信息。给出你的判断
+6. 有态度有观点：给出你自己的解读和判断，不做纯粹的信息搬运
 7. 中文正文，英文专有名词保留原文（如 Claude、GPT-4o、LangChain）
 8. 禁止出现：本文介绍、众所周知、随着XX的发展、让我们一起来看、不用多说、在当今时代
 
@@ -98,7 +98,9 @@ EVIDENCE_DISCIPLINE = """
 7. 每节至少有一个"来源锚"：具体来源名 + URL，或一句"公开材料中未查到 XX 信息"的明示。
 """
 
-# ── 中文语言纪律（公众号/知乎硬规则，不注入小红书）────────
+# ── 中文语言纪律（全平台硬规则）────────
+# 小红书过去不注入此段，但审稿端 CRITIC_SYSTEM 的"语言纪律"是无条件应用的，
+# 于是 writer 按模板要塞 emoji、critic 按规则判 emoji 违规，三轮重写必挂。
 # 来源：human-language-writing skill 的中文禁用清单，转为 LLM 可执行的硬规则。
 ZH_DISCIPLINE = """
 【中文语言纪律——违反任何一条视为不合格，比字数要求更重要】
@@ -108,7 +110,12 @@ ZH_DISCIPLINE = """
    不算破坏中文标题；禁止整句英文标题或英文单词超过一半的标题。
 2. 正文必须是纯中文句子。允许保留英文的仅限：专有名词（产品、模型、公司、人名）和技术缩写（MCP、RAG、API、GPU、SWE-bench 这类）。整句或整段英文一律禁止；英文引语必须翻成中文转述，用"据 XX 报道"标明出处。
 3. 正文禁用一切彩色 emoji（✅⭐🟢⚪🔴💡🔥✨等）。✓ ✗ ⚠ ★ 这类纯文本符号可少量使用。
-4. 翻译腔句式禁用："不是…而是…"（全文禁用，一次都不许出现，用直接陈述改写）、"这意味着"、"当…的时候"、"诚然…但是…更重要的是"、连续的"被…所…"被动句。
+4. 翻译腔句式禁用："不是…而是…"（正文与标题全文禁用，一次都不许出现；引用素材原话时也必须转述改写，不能照抄）、"这意味着"、"当…的时候"、"诚然…但是…更重要的是"、连续的"被…所…"被动句。
+   命中时的改写范式（照此改写，不要自行发挥）：
+   反例：企业缺的不是更强的模型，而是能进现场的工程师
+   正例：企业真正需要的是能进现场的工程师，更强的模型解决不了落地问题
+   反例：它的增长不是因为软件比对手强，而是因为有分发渠道
+   正例：它的增长主要来自分发渠道，软件能力只是次要因素
 5. 框架词禁用：综上所述、总而言之、值得注意的是、首先…其次…最后、在某种程度上。
 6. 大厂黑话禁用：赋能、抓手、闭环、沉淀、对齐、赛道、链路、心智、势能、兜底、底层逻辑、颗粒度。
 7. 表格里表示状态用中文词（已支持/不支持/已开源/闭源），禁用 ⭐🟢⚪ 这类符号列状态。
@@ -127,7 +134,7 @@ PLATFORM_PROMPTS: dict[str, str] = {
 - 使用中文标点（：、——、？）
 - 包含具体信息（版本号、数据、关键特性），让标题本身就有信息量
 - 好的标题示例：
-  · "Harness Engineering：2026 年最值得学的不是 AI，而是给 AI 搭脚手架"
+  · "Harness Engineering：2026 年真正的门槛在给 AI 搭脚手架"
   · "GLM-5.1：国产大模型编程能力首次逼近 Claude Opus 4.6"
   · "Vibe Coding 正在杀死开源"
 - 禁止用：震惊、万字长文、建议收藏、深度好文、你绝对想不到
@@ -156,11 +163,11 @@ PLATFORM_PROMPTS: dict[str, str] = {
 请根据下方素材，写一篇关于「{topic}」的小红书笔记。
 
 【标题要求】
-- emoji + 口语化 + 有具体信息
+- 口语化 + 有具体信息
 - 25字以内
 - 好的标题举例：
-  · "🤯 试了3天这个工具，效率直接翻倍"
-  · "💡 别再用XX了！这个方案碾压级好用"
+  · "试了3天这个工具，效率直接翻倍"
+  · "别再用XX了！这个方案碾压级好用"
 - 禁止用：赶紧收藏、建议码住、太全了
 
 【结构要求】
@@ -170,10 +177,10 @@ PLATFORM_PROMPTS: dict[str, str] = {
 
 【格式要求】
 - 字数：400~600字
-- emoji 适度（每2~3行一个），段落之间空一行
+- 段落之间空一行
 - 结尾另起一行，6~8个 #标签
 {image_instructions}
-""" + WRITING_PRINCIPLES + """
+""" + WRITING_PRINCIPLES + ZH_DISCIPLINE + """
 【素材】
 {context}
 """,
@@ -267,7 +274,7 @@ def _get_image_instruction(image_mode: str) -> str:
         return IMAGE_INSTRUCTION
 
 
-def build_prompt(platform: Platform, topic: str, context: str, direction: str = "", outline: str = "", image_mode: str = "image") -> str:
+def build_prompt(platform: Platform, topic: str, context: str, direction: str = "", outline: str = "", image_mode: str = "image", critic_feedback: str = "") -> str:
     """用实际内容替换模板中的占位符"""
     if not direction:
         direction = DEFAULT_DIRECTION
@@ -294,4 +301,12 @@ def build_prompt(platform: Platform, topic: str, context: str, direction: str = 
     # 注入文章规划（如果有）
     if outline:
         result = result.replace("【素材】", f"【文章规划（Planner 产出，请参考但不必死板遵循）】\n{outline}\n\n【素材】")
+    # 重写轮次：把上一轮评审的具体问题顶到【素材】正前方。
+    # 只补搜素材是不够的——writer 拿不到 feedback 就会重复上一轮的违规，
+    # 三轮都在同样的硬闸上翻车。
+    if critic_feedback:
+        result = result.replace(
+            "【素材】",
+            f"【上一轮评审未通过，本次必须逐条修正以下问题，不得重复】\n{critic_feedback}\n\n【素材】",
+        )
     return result
