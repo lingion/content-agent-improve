@@ -36,6 +36,7 @@ class AgentState(TypedDict):
     history_context: str         # 从向量库检索到的历史素材
     critic_score: int            # Critic 评分（1~10）
     critic_feedback: str         # Critic 修改建议
+    retry_action: NotRequired[str]  # 重试路由：rewrite=直接重写 / research=补搜后重写
     retry_count: int             # 重写次数（最多 2 次）
     image_style: NotRequired[str]  # 图片风格预设（可选）
     topic_id: NotRequired[int]     # 数据库 topic ID，用于关联向量库

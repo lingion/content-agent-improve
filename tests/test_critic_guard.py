@@ -1,6 +1,19 @@
 import unittest
 
-from agent.tools.critic_guard import apply_caps, validate_violations
+from agent.tools.critic_guard import apply_caps, sanitize_retry_action, validate_violations
+
+
+class RetryActionTests(unittest.TestCase):
+    def test_valid_values_pass_through(self):
+        self.assertEqual(sanitize_retry_action("rewrite"), "rewrite")
+        self.assertEqual(sanitize_retry_action("research"), "research")
+        self.assertEqual(sanitize_retry_action("REWRITE"), "rewrite")
+
+    def test_unrecognized_values_fall_back_to_research(self):
+        # 分诊失败必须回退旧行为（补搜），不能改变流程只是没省时间
+        for raw in (None, "", "edit", "不知道", 42, {"a": 1}):
+            with self.subTest(raw=raw):
+                self.assertEqual(sanitize_retry_action(raw), "research")
 
 
 class ViolationValidationTests(unittest.TestCase):

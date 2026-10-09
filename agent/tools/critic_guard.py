@@ -15,7 +15,7 @@ critic 是 LLM，它对"翻译腔"这类概念会自行扩展判定范围。实�
 
 import re
 
-from agent.tools.style_guard import TRANSLATIONESE_PATTERNS
+from agent.tools.style_guard import TRANSLATIONESE_PATTERNS, _FIXED_TRANSLATIONESE
 
 # 彩色 emoji：U+1F000-U+1FAFF 覆盖绝大多数（🚀💡🔥🟢🔴…），
 # U+2B00-U+2BFF 补上 ⭐ 一类的补充符号。
@@ -24,13 +24,6 @@ _COLOR_EMOJI = re.compile(r"[\U0001F000-\U0001FAFF⬀-⯿]")
 # ✓✗⚠★ 是 ZH_DISCIPLINE 明确允许的，✅✨ 一类的彩色符号要判违规。
 _MISC_SYMBOLS = re.compile(r"[☀-➿]")
 _ALLOWED_TEXT_SYMBOLS = frozenset("✓✗⚠★")
-
-# 语言纪律里逐字列出的其余禁用项
-_FIXED_PHRASES = (
-    re.compile(r"这意味着"),
-    re.compile(r"当[^，。；！？\n]{1,20}的时候"),
-    re.compile(r"诚然[^，。；！？\n]{1,30}但是"),
-)
 
 _BUZZWORDS = (
     "赋能", "抓手", "闭环", "沉淀", "对齐", "赛道", "链路",
@@ -72,7 +65,7 @@ def _quotes_forbidden_element(quote: str) -> bool:
         return True
     if any(p.search(text) for p in TRANSLATIONESE_PATTERNS):
         return True
-    if any(p.search(text) for p in _FIXED_PHRASES):
+    if any(p.search(text) for p in _FIXED_TRANSLATIONESE):
         return True
     if any(word in text for word in _BUZZWORDS):
         return True
@@ -154,6 +147,17 @@ def validate_violations(
         accepted.append({"rule": rule, "quote": quote})
 
     return accepted, rejected
+
+
+def sanitize_retry_action(raw: object) -> str:
+    """清洗 critic 给出的重试动作。
+
+    返回 ``"rewrite"``（问题靠编辑/删改就能解决，直接重写）或
+    ``"research"``（需要补充新素材）。任何无法识别的值都回退到
+    ``"research"`` —— 那是旧行为，分诊失败时不改变流程，只是没省时间。
+    """
+    value = str(raw or "").strip().lower()
+    return "rewrite" if value == "rewrite" else "research"
 
 
 def apply_caps(base_score: int, violations: list[dict]) -> tuple[int, list[str]]:

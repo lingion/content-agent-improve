@@ -4,7 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from agent.state import AgentState
 from agent.llm import get_llm
 from agent.prompts.templates import WRITING_PRINCIPLES
-from agent.tools.critic_guard import apply_caps, validate_violations
+from agent.tools.critic_guard import apply_caps, sanitize_retry_action, validate_violations
 
 
 def _title_evidence_violation(topic: str, context: str, draft: str) -> str:
@@ -60,13 +60,18 @@ CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并�
 ## 输出格式
 严格输出以下 JSON，不要输出任何其他内容：
 ```json
-{{"score": <1到10的整数>, "violations": [{{"rule": "<语言纪律|事实纪律|证据纪律>", "quote": "<触发规则的原文片段>"}}], "feedback": "<具体的修改建议，100字以内>"}}
+{{"score": <1到10的整数>, "violations": [{{"rule": "<语言纪律|事实纪律|证据纪律>", "quote": "<触发规则的原文片段>"}}], "feedback": "<具体的修改建议，100字以内>", "action": "<rewrite|research>"}}
 ```
 
 violations 的填写要求：
 - quote 必须**逐字摘自文章**，不得改写、概括或拼接
 - 只列**确实触发上述规则条目**的违规。规则里没写到的表达，即便你认为不够好，也不要列进来
-- 没有违规时填空数组 []，不要为了显得严格而凑数"""
+- 没有违规时填空数组 []，不要为了显得严格而凑数
+
+action 的判定（决定重试时是否补搜素材）：
+- rewrite：所有问题靠改写、删减或格式调整就能解决——表达纪律、删除无出处内容、补标注格式
+- research：至少有一条需要补充新素材才能解决——缺少关键证据、数据或案例，素材里根本没有
+- 拿不准时填 research（宁多搜一轮，不空写）"""
 
 CRITIC_USER = """## 目标平台：{platform}
 
@@ -123,38 +128,61 @@ def critic_node(state: AgentState) -> dict:
         draft=state["draft"],
     )
 
-    res = get_llm().invoke([
-        SystemMessage(content=system),
-        HumanMessage(content=user),
-    ])
-    raw = res.content.strip()
+    def _parse(raw: str) -> tuple:
+        """剥围栏、解析 JSON。成功返回 (parsed_dict, raw)；失败抛出异常。"""
+        # 剥 ```...``` 围栏
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+                text = "\n".join(lines[1:-1]).strip()
+            elif len(lines) >= 1:
+                text = "\n".join(lines[1:]).strip()
 
-    # 2026-09-18: 本地网关对 GPT-5.6 relay 的流式转换会吃掉响应开头的 `{"`
-    # （首 chunk 缺首字节，实测稳定复现：{"hello":"world"} → hello":"world"}）。
-    # critic 走流式 invoke，裸 {"score": ...} 必然被打残成 score": ...}。
-    # 把缺失的开头补回去，避免评分输出被误判为无法解析。
-    if raw.startswith('score"'):
-        raw = '{"' + raw
+        # 2026-09-18: 本地网关对 GPT-5.6 relay 的流式转换会吃掉响应开头的 `{"`
+        # （首 chunk 缺首字节，实测稳定复现：{"hello":"world"} → hello":"world"}）。
+        # 把缺失的开头补回去。
+        if text.startswith('score"'):
+            text = '{"' + text
 
-    # 解析 JSON — 提取最外层 {}
-    # 注意：解析失败不能默认给 7 分（通过）——那会让质量闸形同虚设。
-    # 评不出来按"未通过"处理（3 分），并把原始输出打出来便于诊断。
-    violations: list = []
-    json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if json_match:
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not json_match:
+            raise ValueError("no JSON found")
+        parsed = json.loads(json_match.group())
+
+        # 引文 quote 限长 50 字，避免超长引文冲垮下游
+        if "violations" in parsed and isinstance(parsed["violations"], list):
+            parsed["violations"] = [
+                {**v, "quote": str(v.get("quote", ""))[:50]}
+                for v in parsed["violations"]
+            ]
+        return parsed, text
+
+    # 解析失败最多重试一次
+    try:
+        parsed, raw_used = _parse(res.content.strip())
+    except Exception:
+        print(f"  [Critic] 首轮解析失败，重试...")
         try:
-            parsed = json.loads(json_match.group())
-            score = int(parsed.get("score", 3))
-            feedback = str(parsed.get("feedback", ""))
-            violations = parsed.get("violations") or []
-        except (json.JSONDecodeError, ValueError, TypeError):
-            score = 3
-            feedback = "评分输出无法解析，按不通过处理"
-            print(f"  [Critic] 原始输出前200字：{raw[:200]}")
-    else:
+            res = get_llm().invoke([
+                SystemMessage(content=system),
+                HumanMessage(content=user),
+            ])
+            parsed, raw_used = _parse(res.content.strip())
+        except Exception:
+            parsed = None
+            raw_used = ""
+
+    if parsed is None:
         score = 3
         feedback = "评分输出无法解析，按不通过处理"
-        print(f"  [Critic] 原始输出前200字：{raw[:200]}")
+        action = "research"
+        print(f"  [Critic] 原始输出前200字：{raw_used[:200]}")
+    else:
+        score = int(parsed.get("score", 3))
+        feedback = str(parsed.get("feedback", ""))
+        violations = parsed.get("violations") or []
+        action = sanitize_retry_action(parsed.get("action"))
 
     score = max(1, min(10, score))
 
@@ -179,10 +207,12 @@ def critic_node(state: AgentState) -> dict:
     print(f"  评分：{score}/10")
     if feedback:
         print(f"  建议：{feedback[:80]}...")
+    print(f"  [Critic] 重试动作：{action}（{'跳过搜索直接重写' if action == 'rewrite' else '补充搜索后重写'}）")
 
     return {
         "critic_score": score,
         "critic_feedback": feedback,
+        "retry_action": action,
         "log": state.get("log", []) + [
             f"📝 Critic 评分：{score}/10 —— {feedback[:50]}"
         ],
