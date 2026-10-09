@@ -30,6 +30,19 @@ _PATTERNS = (
     re.compile(r"[^，。；！？\n]{2,40}[，,]\s*(?:而非|并非)"),
 )
 
+# 确定性短语：无法靠语义判断、必须逐字匹配的翻译腔标记。
+# 与 _PATTERNS 的结构检测互补，两者合并才是完整的翻译腔判定依据。
+_FIXED_TRANSLATIONESE = (
+    re.compile(r"这意味着"),
+    re.compile(r"当[^。；！？\n]{1,20}的时候"),
+    # 逗号必须放行：实际用例是"诚然X，但是Y"，把逗号排除在外会漏掉绝大多数
+    re.compile(r"诚然[^。；！？\n]{1,30}但是"),
+)
+
+# 供 critic 侧校验复用：改写端和判定端必须用同一份模式，
+# 否则会出现"这边改了、那边还按旧定义判"的脱节。
+TRANSLATIONESE_PATTERNS = _PATTERNS + _FIXED_TRANSLATIONESE
+
 REWRITE_SYSTEM = """你是一名中文编辑，负责消除文章里的翻译腔。
 
 请通读收到的整篇文章，把读起来像翻译腔的地方改写成自然的中文表达。
@@ -73,11 +86,16 @@ REWRITE_SYSTEM = """你是一名中文编辑，负责消除文章里的翻译腔
 
 
 def find_violations(text: str) -> list[tuple[int, str]]:
-    """返回 [(行号, 该行内容)]，行号从 0 开始。用于改写后的复检。"""
+    """返回 [(行号, 该行内容)]，行号从 0 开始。用于改写后的复检。
+
+    必须用合并后的 TRANSLATIONESE_PATTERNS——只查 _PATTERNS 会漏掉
+    这意味着／当…的时候／诚然…但是 这三类确定性短语，而那正是判罚端
+    认识、清洗端放过的不对称缺口（实测有整轮被它扣分的案例）。
+    """
     return [
         (i, line)
         for i, line in enumerate(text.split("\n"))
-        if any(p.search(line) for p in _PATTERNS)
+        if any(p.search(line) for p in TRANSLATIONESE_PATTERNS)
     ]
 
 
@@ -116,7 +134,7 @@ def strip_translationese(draft: str) -> tuple[str, int]:
         return draft, 0
 
     try:
-        res = get_llm().invoke(
+        res = get_llm("writer").invoke(
             [
                 SystemMessage(content=REWRITE_SYSTEM),
                 HumanMessage(content=draft),
