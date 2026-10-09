@@ -6,6 +6,36 @@ from agent.config import get_config
 from agent.tools.style_guard import strip_translationese
 import re
 
+_SCREENSHOT_PLACEHOLDER = re.compile(r"^\[SCREENSHOT:\s*(\S+?)\s*,", re.M)
+
+
+def _drop_unanchored_screenshots(draft: str) -> tuple[str, int]:
+    """删除不被正文引用自证的截图占位符。
+
+    保留条件（对应 SCREENSHOT_INSTRUCTION 的锚定规则）：
+    占位符里的 URL 必须在占位符之外的正文里出现过——图是被引用的页面本身。
+    位置不设限：紧跟引用句、放在段落末尾或小节标题之后都可以，
+    评判标准只有"这个页面是否被正文当作证据引用了"。
+    """
+    lines = draft.split("\n")
+    body_without_placeholders = "\n".join(
+        line for line in lines if not line.strip().startswith("[SCREENSHOT:")
+    )
+
+    keep: list[str] = []
+    dropped = 0
+    for line in lines:
+        m = _SCREENSHOT_PLACEHOLDER.match(line.strip())
+        if not m:
+            keep.append(line)
+            continue
+        url = m.group(1).rstrip("/")
+        if url not in body_without_placeholders:
+            dropped += 1
+            continue
+        keep.append(line)
+    return "\n".join(keep), dropped
+
 
 def _get_image_mode() -> str:
     """根据 IMAGE_PROVIDER 配置决定插图模式"""
@@ -112,6 +142,13 @@ def writer_node(state: AgentState) -> dict:
     # 凑数牺牲正文（文章明显变短），并硬配与论点无关的页面（图不对应）。现在改
     # 由 SCREENSHOT_INSTRUCTION 要求"有对应页面才插图"，数量随内容需要决定；
     # 截图失败的部分由 image_fetcher 自动从正文移除，本就不需要预留候选。
+
+    # 截图锚定的确定性执法：prompt 只能约束大概率，writer 手头真引用不够时
+    # 仍会拿无关页面凑数。一张截图要保留，唯一条件是它的 URL 出现在
+    # 占位符之外的正文里（即被当作证据引用过）；位置不限。
+    draft, dropped_shots = _drop_unanchored_screenshots(draft)
+    if dropped_shots:
+        print(f"  [Writer] 移除未锚定截图 {dropped_shots} 张（URL 不在正文引用中）")
 
     # 消除翻译腔句式：prompt 层面的禁令压不住模型的语言惯性，
     # 这里在交付 critic 之前做一次确定性检测 + 局部重写，只动命中的行。

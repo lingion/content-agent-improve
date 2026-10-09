@@ -176,10 +176,11 @@ def _top_up_shortfall(state: AgentState, draft: str, retry_number: int) -> dict:
     remaining budget on no-op rounds. Candidates come from raw_materials URLs
     first (only they can pass evidence anchoring), search-pool second.
     """
-    from agent.nodes.image_fetcher import MIN_SCREENSHOT_COUNT
+    from agent.nodes.image_fetcher import min_screenshots_for
 
+    min_count = min_screenshots_for(state.get("platform", ""))
     already = len(_embedded_screenshot_urls(draft))
-    need = MIN_SCREENSHOT_COUNT - already
+    need = min_count - already
     if need <= 0:
         return {
             "screenshot_retry_count": retry_number,
@@ -228,14 +229,14 @@ def _top_up_shortfall(state: AgentState, draft: str, retry_number: int) -> dict:
     leftover = additions[len(insert_points):]
     if leftover:
         refilled_draft = refilled_draft.rstrip() + "\n\n" + "\n\n".join(leftover) + "\n"
-    print(f"  [Refiller] 截图不足（{already}/{MIN_SCREENSHOT_COUNT}），追加 {len(picks)} 个素材候选占位符")
+    print(f"  [Refiller] 截图不足（{already}/{min_count}），追加 {len(picks)} 个素材候选占位符")
     return {
         "draft": refilled_draft,
         "screenshot_retry_count": retry_number,
         "screenshot_retry_note": "",
         "screenshot_attempted_urls": sorted(used_urls),
         "log": state.get("log", []) + [
-            f"补图第 {retry_number} 轮：截图不足 {already}/{MIN_SCREENSHOT_COUNT}，"
+            f"补图第 {retry_number} 轮：截图不足 {already}/{min_count}，"
             f"追加 {len(picks)} 个候选占位符"
         ],
     }
@@ -245,7 +246,7 @@ def screenshot_refiller_node(state: AgentState) -> dict:
     """Replace failed screenshot placeholders, or top up when captures fall short.
 
     2026-09-25 starvation fix: when every remaining placeholder already
-    captured successfully but the total is still below MIN_SCREENSHOT_COUNT,
+    captured successfully but the total is still below the platform minimum,
     the old code found no slots to replace and burned the remaining refill
     budget on empty rounds (topic 64: 1 capture + 3 no-op rounds → anchored=0).
     Now zero-slots-with-shortfall injects fresh placeholders from discovered

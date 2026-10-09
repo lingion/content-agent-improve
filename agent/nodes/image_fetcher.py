@@ -21,6 +21,15 @@ MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 VISUAL_HASH_DISTANCE_THRESHOLD = 1
 MIN_SCREENSHOT_COUNT = 5
 MAX_SCREENSHOT_COUNT = 9
+
+# 各平台的截图下限。统一 5 张对短文平台是灾难：小红书规格 400~600 字，
+# 5 张图意味着每百字一图，refiller 为凑数塞入与论点无关的页面。
+# 下限按平台篇幅缩放，锚定（URL 被正文引用）由 writer 侧保证，数量只设底线。
+PLATFORM_MIN_SCREENSHOTS = {"xiaohongshu": 2, "zhihu": 3, "wechat": 4}
+
+
+def min_screenshots_for(platform: str) -> int:
+    return PLATFORM_MIN_SCREENSHOTS.get(platform, MIN_SCREENSHOT_COUNT - 1)
 # Candidate URLs are intentionally more numerous than the final article
 # count. Official sites can be blocked, rate-limited, or require JavaScript;
 # keeping a larger pool prevents a few bad candidates from exhausting the run.
@@ -318,7 +327,8 @@ def image_fetcher_node(state: AgentState) -> dict:
     }
     successful_screenshot_count = len(existing_screenshot_urls) + len(successful_screenshot_placeholders)
     screenshot_mode = source == "screenshot"
-    if screenshot_mode and not MIN_SCREENSHOT_COUNT <= successful_screenshot_count <= MAX_SCREENSHOT_COUNT:
+    min_count = min_screenshots_for(platform or "")
+    if screenshot_mode and not min_count <= successful_screenshot_count <= MAX_SCREENSHOT_COUNT:
         failed_urls = [
             url for placeholder, (url, _) in screenshot_tasks.items()
             if placeholder not in successful_screenshot_placeholders

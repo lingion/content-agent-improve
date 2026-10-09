@@ -224,13 +224,18 @@ IMAGE_INSTRUCTION = """- 插图：在每个 ## 段落开始前，单独一行写
   ✗ [IMAGE: performance comparison]（没有画面）
   ✓ [IMAGE: A futuristic digital illustration showing a glowing Chinese dragon made of circuit board patterns and code streams, coiling around a large glowing "5.1" number. Blue and gold light emanating outward. Color palette: deep navy (#0A1628), electric blue (#1A73E8), gold (#FFD600). Style: flat vector with cinematic lighting, 16:9]"""
 
-SCREENSHOT_INSTRUCTION = """- 插图：在需要展示产品界面、官方文档或实际效果的论点前，单独一行写 [SCREENSHOT: 官方网址, 中文描述]
-  截图要服务于它上方那一段的论证，中文描述写清这张图具体展示什么。
-  URL 只能取自「素材摘要」中列出的页面，禁止凭记忆编造——编造的 URL 会 404 导致截图失败。
-  素材里没有与段落对应的页面时，这一段就不插图。图片数量由内容需要决定，不要为了凑数硬配。
-  不要官网首页、搜索结果页、聚合站；优先官方文档页、功能子页、结果页。
-  同一个页面只用一次。
-  ✓ [SCREENSHOT: https://platform.openai.com/docs/guides/text, 官方文本功能文档]"""
+SCREENSHOT_INSTRUCTION = """- 插图：截图与引用绑定。正文某处引用了来源（据 XX（URL）…）时，紧跟下一行写 [SCREENSHOT: 同一URL, 中文描述] —— 截图就是被引用的那个页面本身
+  规则：
+  1. 截图 URL 必须与该处引用的 URL 完全一致，禁止另找页面、禁止凭记忆编造
+  2. 每处引用最多一张截图；没有引用的段落不插图，不要为了配图硬加引用
+  3. 截图放在引用它的句子或所在段落附近——紧跟引用句、段落末尾、小节开头均可，位置自由，锚定是唯一标准
+  4. 引用分布在全文各处，截图也要跟着分布——禁止在文章开头集中堆图
+  5. 官网首页、搜索结果页、聚合页没有证据价值，即使被引用也不要截
+  6. 同一个 URL 只截一次
+  中文描述写清这个页面上的什么内容支撑了该处论断。
+  示例：
+  据 OpenAI 官方文档（https://platform.openai.com/docs/guides/text），文本模型支持结构化输出。
+  [SCREENSHOT: https://platform.openai.com/docs/guides/text, OpenAI 文档中结构化输出功能的说明页]"""
 
 MIXED_INSTRUCTION = """- 插图方式一（截图）：在需要展示**产品界面、官方页面、实际效果**的段落前，单独一行写 [SCREENSHOT: 官方网址, 中文描述]
   截图目标必须是与本段内容直接相关的官方网站、产品页面、文档页面。
