@@ -20,7 +20,8 @@ class AgentState(TypedDict):
     topic: str                   # 用户输入的主题
     platform: Platform           # 目标平台
     direction: str               # 内容方向（预设 key 或自定义描述）
-    outline: str                 # Planner 规划的文章大纲（角度、框架、要点）
+    outline: str                 # Planner 规划的文章大纲（角度、框架、要点、视觉叙事线）
+    article_type: NotRequired[Literal["consulting", "creative"]]  # Planner 分类：咨询类（评测/对比/指南，默认）/ 创造类（观点/叙事/概念）。决定 writer prompt 分支与 image_fetcher provider 路由
     keywords: list[str]          # Planner 拆解的搜索关键词
     raw_materials: list[str]     # 搜索到的原始素材（每条一个字符串）
     context: str                 # 整理后的素材摘要（喂给 Writer）
@@ -34,7 +35,7 @@ class AgentState(TypedDict):
     final_article: str           # 替换图片占位符后的最终文章
     log: list[str]               # 运行日志，供前端侧边栏展示
     history_context: str         # 从向量库检索到的历史素材
-    critic_score: int            # Critic 评分（1~10）
+    critic_score: float          # Critic 评分（1~10；narrative_design 改动 3 起支持 0.5 颗粒：LLM 4 项 9 分制 + 代码算图文一致性 1 分 = 10 分制；pass ≥ 7.5）
     critic_feedback: str         # Critic 修改建议
     retry_action: NotRequired[str]  # 重试路由：rewrite=直接重写 / research=补搜后重写
     retry_count: int             # 重写次数（最多 2 次）
@@ -47,3 +48,16 @@ class AgentState(TypedDict):
     screenshot_source_urls: NotRequired[list[str]]  # 已接受截图的最终页面 URL
     screenshot_attempted_urls: NotRequired[list[str]]  # 本次生成已尝试过的候选，跨补图轮次去重
     research_failed: NotRequired[bool]  # 没有可核验的本轮搜索素材时硬性终止
+    image_placeholders: NotRequired[list[dict]]
+    # Writer 节点解析的 IMAGE/SCREENSHOT 占位符逐项元数据（narrative_design 改动 2）。
+    # 每项：
+    #   placeholder: 原始占位符字符串（如 "[IMAGE: ...]"）
+    #   kind: "image" | "screenshot"
+    #   heading: 占位符前最近的 `##` 标题（首屏前则为 None）
+    #   paragraph_index: 在该 heading 下是第几个段落（从 0 计）
+    #   char_offset: 占位符在 draft 里的起始字符偏移
+    #   role: LLM 自注角色（hero/evidence/contrast/transition/decorative/unassigned）
+    #   reason: LLM 自注「为什么放这里」
+    #   caption: SCREENSHOT 第二组（中文描述），IMAGE 则为 None
+    # 消费方：refiller 按元数据找未覆盖 heading 补图；critic 检查自注完整性；
+    #        image_fetcher 按 article_type 路由。解析失败 → 字段为空列表 → 降级到旧行为。
