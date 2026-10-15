@@ -89,11 +89,26 @@ def save_memory_node(state: AgentState) -> dict:
 
 
 def increment_retry(state: AgentState) -> dict:
-    """重试计数 +1，在回到 researcher 之前执行。"""
+    """重试计数 +1，在回到 researcher 或 writer 之前执行。"""
     return {
         "retry_count": state.get("retry_count", 0) + 1,
         "log": state.get("log", []) + ["🔄 初稿不达标，重新搜索并重写..."],
     }
+
+
+def route_retry(state: AgentState) -> str:
+    """按 critic 的分诊结果路由重试路径。
+
+    反馈分三类：表达纪律、删除无出处内容、补标注格式——都能靠编辑解决，
+    对它们再做一轮补充搜索是纯浪费（素材池虚胖、每轮多花数分钟，且新素材
+    在百条池子里被摘要稀释，对 writer 几乎没有影响）。只有"素材里根本没有"
+    的证据缺口才值得搜。critic 通过 action 字段给出判断，识别失败回退
+    research（旧行为）。
+    """
+    if state.get("retry_action") == "rewrite":
+        print("  [Retry] 编辑类反馈，跳过补充搜索，直接重写")
+        return "rewrite"
+    return "research"
 
 
 def should_retry_screenshots(state: AgentState) -> str:
@@ -173,7 +188,11 @@ workflow.add_conditional_edges(
         "fail": "score_requirement_failed",
     },
 )
-workflow.add_edge("increment_retry", "researcher")
+workflow.add_conditional_edges(
+    "increment_retry",
+    route_retry,
+    {"research": "researcher", "rewrite": "writer"},
+)
 workflow.add_edge("paraphraser", "image_fetcher")
 workflow.add_conditional_edges(
     "image_fetcher",

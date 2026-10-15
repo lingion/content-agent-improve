@@ -18,6 +18,18 @@ class TranslationeseDetectionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(len(find_violations(text)), 1)
 
+    def test_detects_fixed_phrases(self):
+        # 这三类是"判罚端认识、清洗端放过"的不对称缺口，必须由 find_violations 兜住
+        cases = [
+            "这意味着交付范式已经改变。",
+            "当你想改流程的时候，先看权限。",
+            "诚然成本高，但是值得。",
+            "诚然，成本很高，但是值得。",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(len(find_violations(text)), 1)
+
     def test_plain_negation_is_not_flagged(self):
         cases = [
             "这不是问题。",

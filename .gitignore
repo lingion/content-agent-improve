@@ -20,3 +20,5 @@ output_*
 data/
 
 .next
+*.local.md
+
